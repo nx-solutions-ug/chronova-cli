@@ -1,0 +1,25 @@
+[build.env]
+passthrough = [
+    "CARGO_NET_GIT_FETCH_WITH_CLI=true",
+]
+
+# Target-specific configurations
+[target.x86_64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-gnu-cross:main"
+
+[target.x86_64-unknown-linux-musl]
+image = "ghcr.io/cross-rs/x86_64-unknown-linux-musl-cross:main"
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu-cross:main"
+
+[target.x86_64-pc-windows-gnu]
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu-cross:main"
+
+[target.x86_64-apple-darwin]
+# macOS cross-compilation using local osxcross Docker image
+image = "x86_64-apple-darwin-cross.local:latest"
+
+[target.aarch64-apple-darwin]
+# macOS cross-compilation using local osxcross Docker image (supports both Intel and Apple Silicon)
+image = "x86_64-apple-darwin-cross.local:latest"
