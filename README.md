@@ -195,16 +195,6 @@ cargo audit
 | `anyhow` | Error handling |
 | `tracing` | Logging |
 
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
@@ -216,8 +206,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- 🐛 [Issue Tracker](https://github.com/chronova/chronova-cli/issues)
-- 💬 [Discussions](https://github.com/chronova/chronova-cli/discussions)
+For questions or support, please:
+
+- 💬 Email us at support@chronova.dev
+- 🐛 Report issues on [GitHub](https://github.com/nx-solutions-ug/chronova-cli/issues)
+- 📖 [Read the documentation](https://chronova.dev/docs)
 
 ---
 
