@@ -20,11 +20,30 @@ Chronova CLI tracks your coding activity by monitoring file changes and sending 
 
 ## 🚀 Installation
 
+### Quick Install (Recommended)
+
+**Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/nx-solutions-ug/chronova-cli/main/install-linux.sh | bash
+```
+
+**macOS:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/nx-solutions-ug/chronova-cli/main/install-macos.sh | bash
+```
+
+**Windows (PowerShell):**
+```powershell
+irm https://raw.githubusercontent.com/nx-solutions-ug/chronova-cli/main/install-windows.ps1 | iex
+```
+
+For detailed installation options, manual installation, troubleshooting, and platform-specific requirements, see **[INSTALL.md](INSTALL.md)**.
+
 ### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/chronova/chronova-cli.git
+git clone https://github.com/nx-solutions-ug/chronova-cli.git
 cd chronova-cli
 
 # Build release binary
@@ -32,10 +51,6 @@ cargo build --release
 
 # The binary will be at target/release/chronova-cli
 ```
-
-### Pre-built Binaries
-
-Download pre-built binaries from the [releases page](https://github.com/chronova/chronova-cli/releases).
 
 ## 📖 Usage
 
