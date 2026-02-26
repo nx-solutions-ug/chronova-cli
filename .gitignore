@@ -1,3 +1,17 @@
 /dist
 /target
 .opencode/index
+
+# open-mem: Auto-generated folder context files.
+# Uncomment to exclude from version control (recommended for large projects):
+# **/AGENTS.md
+
+# MAD agent files (never commit)
+.agent-task
+.agent-done
+.agent-blocked
+.agent-error
+.mad-logs.jsonl
+
+# Worktrees directory
+worktrees/
