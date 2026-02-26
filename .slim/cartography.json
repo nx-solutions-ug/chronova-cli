@@ -1,0 +1,33 @@
+{
+  "metadata": {
+    "version": "1.0.0",
+    "last_run": "2026-02-26T17:03:12.124860Z",
+    "root": "/home/dev/.projects/chronova-cli",
+    "include_patterns": [
+      "src/**/*.rs"
+    ],
+    "exclude_patterns": [
+      "tests/**",
+      "target/**",
+      "**/*.md"
+    ],
+    "exceptions": []
+  },
+  "file_hashes": {
+    "src/api.rs": "a6585631287776d3e61fc23f445de551",
+    "src/cli.rs": "97cc2f8fba1bda670c6471e83578b692",
+    "src/collector.rs": "56f4e3721bafe57768368e1b795dcd9d",
+    "src/config.rs": "1d582d905a64ead417c1e97271b630d2",
+    "src/heartbeat.rs": "7f410e9fefbfa74a89aad08d6cdf58e3",
+    "src/lib.rs": "6ba4c14b966bfc107e45e04f72ffc6ce",
+    "src/logger.rs": "325b98ffc75df3511104c489d9b63f37",
+    "src/main.rs": "364be4517ba76acfabf81434cc5e0cb3",
+    "src/queue.rs": "be647edb008b516196c8dbbc094fad8a",
+    "src/sync.rs": "d3d748f74d6a32b11558a31f6a349a39",
+    "src/user_agent.rs": "c034b0f2ae256c47190aa6a4e4a5e317"
+  },
+  "folder_hashes": {
+    "src": "175dc18646e3b44e833596f4d7bfebfe",
+    ".": ""
+  }
+}

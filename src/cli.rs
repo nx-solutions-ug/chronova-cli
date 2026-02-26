@@ -78,7 +78,7 @@ pub struct Cli {
     #[arg(long)]
     pub alternate_project: Option<String>,
 
-    /// API base url used when sending heartbeats and fetching code stats. Defaults to https://api.wakatime.com/api/v1/.
+    /// API base url used when sending heartbeats and fetching code stats. Defaults to https://chronova.dev/api/v1/.
     #[arg(long)]
     pub api_url: Option<String>,
 

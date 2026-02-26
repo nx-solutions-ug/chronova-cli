@@ -178,11 +178,7 @@ impl Config {
     pub fn get_api_url(&self) -> String {
         self.api_url
             .clone()
-<<<<<<< HEAD
             .unwrap_or_else(|| "https://chronova.dev/api/v1".to_string())
-=======
-            .unwrap_or_else(|| "https://api.wakatime.com/api/v1/".to_string())
->>>>>>> fix/api-url-default
     }
 
     fn parse_sync_config(
@@ -270,7 +266,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             api_key: None,
-            api_url: Some("https://api.wakatime.com/api/v1/".to_string()),
+            api_url: Some("https://chronova.dev/api/v1".to_string()),
             debug: false,
             proxy: None,
             ignore_patterns: vec![
