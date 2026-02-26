@@ -239,34 +239,6 @@ impl ApiClient {
         Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
     }
 
-    async fn handle_response(&self, response: Response) -> Result<Response, ApiError> {
-        let status = response.status();
-
-        if status.is_success() {
-            return Ok(response);
-        }
-
-        let error_body = response.text().await.unwrap_or_default();
-
-        match status.as_u16() {
-            401 => Err(ApiError::Auth("Invalid API key".to_string())),
-            403 => Err(ApiError::Auth("Access denied".to_string())),
-            429 => Err(ApiError::RateLimit("Rate limit exceeded".to_string())),
-            400..=499 => Err(ApiError::Api(
-                format!("Client error: {}", status),
-                error_body,
-            )),
-            500..=599 => Err(ApiError::Api(
-                format!("Server error: {}", status),
-                error_body,
-            )),
-            _ => Err(ApiError::Api(
-                format!("Unexpected status: {}", status),
-                error_body,
-            )),
-        }
-    }
-
     pub fn with_api_key(self, api_key: String) -> AuthenticatedApiClient {
         AuthenticatedApiClient {
             client: self.client,
