@@ -18,7 +18,7 @@ use crate::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
 use crate::api::ApiClient;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     // Parse command line arguments
     let cli = Cli::parse();
 
@@ -26,7 +26,7 @@ async fn main() {
     if cli.version {
         // Print name and version for wakatime-cli compatibility (e.g., "chronova-cli/v0.1.0")
         println!("chronova-cli v{}", env!("CARGO_PKG_VERSION"));
-        return;
+        return Ok(());
     }
 
     // Handle --today flag (fetch and display today's coding activity)
@@ -60,7 +60,7 @@ async fn main() {
             eprintln!("Error fetching today's activity: {}", e);
             process::exit(1);
         }
-        return;
+        return Ok(());
     }
 
     // Handle config read/write operations
@@ -69,7 +69,7 @@ async fn main() {
             eprintln!("Error handling config operation: {}", e);
             process::exit(1);
         }
-        return;
+        return Ok(());
     }
 
     // Handle offline count operations
@@ -121,21 +121,23 @@ async fn main() {
                 process::exit(1);
             }
         }
-        return;
+        return Ok(());
     }
 
     // Handle file experts operations
     if cli.file_experts {
-        // This would display the top developer for the given entity
-        eprintln!("File experts operation not yet implemented");
-        process::exit(1);
+        return Err(anyhow::anyhow!(
+            "File experts operation is not yet implemented. \n\
+            This feature will be available in a future release."
+        ));
     }
 
     // Handle today goal operations
     if cli.today_goal.is_some() {
-        // This would display time for the given goal id today
-        eprintln!("Today goal operation not yet implemented");
-        process::exit(1);
+        return Err(anyhow::anyhow!(
+            "Today goal operation is not yet implemented. \n\
+            This feature will be available in a future release."
+        ));
     }
 
     // Handle user agent operations
@@ -143,7 +145,7 @@ async fn main() {
         // This would print the user agent and exit
         let user_agent = crate::user_agent::generate_user_agent(cli.plugin.as_deref());
         println!("{}", user_agent);
-        return;
+        return Ok(());
     }
 
     // Handle extra heartbeats from STDIN
@@ -184,7 +186,7 @@ async fn main() {
             eprintln!("Error processing extra heartbeats: {}", e);
             process::exit(1);
         }
-        return;
+        return Ok(());
     }
 
     // Entity is required for actual heartbeat processing (unless syncing offline activity)
@@ -270,7 +272,7 @@ async fn main() {
                 process::exit(1);
             }
         }
-        return;
+        return Ok(());
     }
 
     // Initialize heartbeat manager
@@ -285,6 +287,8 @@ async fn main() {
         eprintln!("Error processing heartbeat: {}", e);
         process::exit(1);
     }
+
+    Ok(())
 }
 
 async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::Error> {
