@@ -2,20 +2,10 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use std::process;
 
-mod cli;
-mod config;
-mod heartbeat;
-mod api;
-mod queue;
-mod collector;
-mod logger;
-mod sync;
-mod user_agent;
-
-use crate::cli::Cli;
-use crate::config::Config;
-use crate::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
-use crate::api::ApiClient;
+use chronova_cli::cli::Cli;
+use chronova_cli::config::Config;
+use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
+use chronova_cli::api::ApiClient;
 
 #[tokio::main]
 async fn main() {
@@ -38,12 +28,12 @@ async fn main() {
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            crate::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
         } else {
-            crate::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
@@ -81,12 +71,12 @@ async fn main() {
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            crate::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
         } else {
-            crate::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
@@ -141,7 +131,7 @@ async fn main() {
     // Handle user agent operations
     if cli.user_agent {
         // This would print the user agent and exit
-        let user_agent = crate::user_agent::generate_user_agent(cli.plugin.as_deref());
+        let user_agent = chronova_cli::user_agent::generate_user_agent(cli.plugin.as_deref());
         println!("{}", user_agent);
         return;
     }
@@ -155,12 +145,12 @@ async fn main() {
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            crate::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
         } else {
-            crate::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
@@ -202,12 +192,12 @@ async fn main() {
 
     // Setup logging with appropriate output format handling
     let _guard = if json_output {
-        crate::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
+        chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
             eprintln!("Failed to setup logging: {}", e);
             process::exit(1);
         })
     } else {
-        crate::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
+        chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
             eprintln!("Failed to setup logging: {}", e);
             process::exit(1);
         })
@@ -228,12 +218,12 @@ async fn main() {
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            crate::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
         } else {
-            crate::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
+            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
                 process::exit(1);
             })
@@ -307,7 +297,7 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
                 // When output is JSON, we MUST only output the JSON and nothing else
                 // to avoid breaking VSCode extension parsing
                 let json_output = serde_json::json!({
-                    "text": crate::api::format_today_output(&statusbar_data, cli.today_hide_categories),
+                    "text": chronova_cli::api::format_today_output(&statusbar_data, cli.today_hide_categories),
                     "has_team_features": statusbar_data.has_team_features.unwrap_or(false)
                 });
                 // Use print! instead of println! to avoid adding extra newline for JSON output
@@ -315,13 +305,13 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
             }
             "text" | _ => {
                 // Default text output
-                let output = crate::api::format_today_output(&statusbar_data, cli.today_hide_categories);
+                let output = chronova_cli::api::format_today_output(&statusbar_data, cli.today_hide_categories);
                 println!("{}", output);
             }
         }
     } else {
         // Default text output when no --output flag is provided
-        let output = crate::api::format_today_output(&statusbar_data, cli.today_hide_categories);
+        let output = chronova_cli::api::format_today_output(&statusbar_data, cli.today_hide_categories);
         println!("{}", output);
     }
 
@@ -330,7 +320,7 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
 
 /// Handle config read/write operations
 async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
-    let config_path = crate::config::Config::resolve_config_path(&cli.config)?;
+    let config_path = chronova_cli::config::Config::resolve_config_path(&cli.config)?;
     let section = cli.config_section.as_deref().unwrap_or("settings");
 
     // Handle config read
@@ -425,7 +415,7 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
 
     // Parse the JSON array of heartbeats, but handle missing id field
     // External heartbeats (from WakaTime extension) may not include an id field
-    let heartbeats_result: Result<Vec<crate::heartbeat::Heartbeat>, _> = serde_json::from_str(&input);
+    let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> = serde_json::from_str(&input);
 
     let heartbeats = match heartbeats_result {
         Ok(heartbeats) => heartbeats,
@@ -472,7 +462,7 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
             // Convert to proper heartbeats by adding id field
             let mut heartbeats = Vec::new();
             for relaxed in relaxed_heartbeats {
-                let heartbeat = crate::heartbeat::Heartbeat {
+                let heartbeat = chronova_cli::heartbeat::Heartbeat {
                     id: Uuid::new_v4().to_string(), // Generate UUID for missing id
                     entity: relaxed.entity,
                     entity_type: relaxed.entity_type,
@@ -484,7 +474,7 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
                     lines: relaxed.lines,
                     lineno: relaxed.lineno,
                     cursorpos: relaxed.cursorpos,
-                    user_agent: Some(crate::user_agent::generate_user_agent(relaxed.user_agent.as_deref())),
+                    user_agent: Some(chronova_cli::user_agent::generate_user_agent(relaxed.user_agent.as_deref())),
                     category: relaxed.category,
                     machine: relaxed.machine,
                     editor: None,
