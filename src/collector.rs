@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use lazy_static::lazy_static;
 use git2::Repository;
 
@@ -283,77 +282,6 @@ impl DataCollector {
             .to_string()
     }
 
-    fn get_git_branch(&self, git_root: &Path) -> Option<String> {
-        let output = Command::new("git")
-            .current_dir(git_root)
-            .args(["branch", "--show-current"])
-            .output()
-            .ok()?;
-            
-        if output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !branch.is_empty() {
-                return Some(branch);
-            }
-        }
-        
-        None
-    }
-
-    fn get_git_commit_hash(&self, git_root: &Path) -> Option<String> {
-        let output = Command::new("git")
-            .current_dir(git_root)
-            .args(["rev-parse", "HEAD"])
-            .output()
-            .ok()?;
-            
-        if output.status.success() {
-            let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !hash.is_empty() {
-                return Some(hash);
-            }
-        }
-        
-        None
-    }
-
-    fn get_git_remote_url(&self, git_root: &Path) -> Option<String> {
-        let output = Command::new("git")
-            .current_dir(git_root)
-            .args(["config", "--get", "remote.origin.url"])
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        if raw.is_empty() {
-            return None;
-        }
-
-        // Sanitize remote URL to remove sensitive userinfo (user:pass or token before '@').
-        // Strategy:
-        //  - If a scheme exists, remove userinfo only from the authority portion.
-        //  - Otherwise (scp-like), strip leading "userinfo@".
-        if let Some(scheme_sep) = raw.find("://") {
-            let (scheme, rest) = raw.split_at(scheme_sep + 3); // include "://"
-            let auth_end = rest.find('/').unwrap_or(rest.len());
-            let (authority, path) = rest.split_at(auth_end);
-            if let Some(at_pos) = authority.find('@') {
-                let without_user = &authority[at_pos + 1..];
-                return Some(format!("{}{}{}", scheme, without_user, path));
-            }
-            return Some(raw);
-        }
-
-        if let Some(at_pos) = raw.find('@') {
-            return Some(raw[at_pos + 1..].to_string());
-        }
-
-        Some(raw)
-    }
 }
 
 lazy_static! {

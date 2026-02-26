@@ -1,7 +1,7 @@
-use rusqlite::{Connection, params, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
 
 use crate::heartbeat::Heartbeat;
 use crate::sync::{SyncStatus, SyncStatusSummary};
@@ -58,42 +58,28 @@ impl QueueEntry {
     }
 }
 
-/// Represents queue statistics
-#[derive(Debug, Clone)]
-#[derive(Default)]
-pub struct QueueStats {
-    /// Total number of entries
-    pub total_count: usize,
-    /// Number of pending entries
-    pub pending_count: usize,
-    /// Number of syncing entries
-    pub syncing_count: usize,
-    /// Number of synced entries
-    pub synced_count: usize,
-    /// Number of failed entries
-    pub failed_count: usize,
-    /// Number of permanent failures
-    pub permanent_failure_count: usize,
-    /// Oldest entry timestamp
-    pub oldest_entry: Option<chrono::DateTime<chrono::Utc>>,
-    /// Newest entry timestamp
-    pub newest_entry: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-
 /// Trait defining the queue operations for offline heartbeat synchronization
 pub trait QueueOps {
     /// Add a heartbeat to the queue
     fn add(&self, heartbeat: Heartbeat) -> Result<(), QueueError>;
 
     /// Get pending heartbeats (with optional sync status filtering)
-    fn get_pending(&self, limit: Option<usize>, status_filter: Option<SyncStatus>) -> Result<Vec<Heartbeat>, QueueError>;
+    fn get_pending(
+        &self,
+        limit: Option<usize>,
+        status_filter: Option<SyncStatus>,
+    ) -> Result<Vec<Heartbeat>, QueueError>;
 
     /// Remove a heartbeat from the queue by ID
     fn remove(&self, id: &str) -> Result<(), QueueError>;
 
     /// Update the sync status of a heartbeat
-    fn update_sync_status(&self, id: &str, status: SyncStatus, metadata: Option<String>) -> Result<(), QueueError>;
+    fn update_sync_status(
+        &self,
+        id: &str,
+        status: SyncStatus,
+        metadata: Option<String>,
+    ) -> Result<(), QueueError>;
 
     /// Count heartbeats by sync status
     fn count_by_status(&self, status: Option<SyncStatus>) -> Result<usize, QueueError>;
@@ -152,19 +138,27 @@ impl QueueOps for Queue {
         Ok(())
     }
 
-    fn get_pending(&self, limit: Option<usize>, status_filter: Option<SyncStatus>) -> Result<Vec<Heartbeat>, QueueError> {
+    fn get_pending(
+        &self,
+        limit: Option<usize>,
+        status_filter: Option<SyncStatus>,
+    ) -> Result<Vec<Heartbeat>, QueueError> {
         let limit = limit.unwrap_or(100);
         let status_filter = status_filter.unwrap_or(SyncStatus::Pending);
         let status_str: String = status_filter.into();
 
         let mut stmt = self.conn.prepare(
-            "SELECT data FROM heartbeats WHERE sync_status = ?1 ORDER BY created_at ASC LIMIT ?2"
+            "SELECT data FROM heartbeats WHERE sync_status = ?1 ORDER BY created_at ASC LIMIT ?2",
         )?;
 
         let heartbeats_iter = stmt.query_map(params![status_str, limit], |row| {
             let data: String = row.get(0)?;
             serde_json::from_str::<Heartbeat>(&data).map_err(|e| {
-                rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
             })
         })?;
 
@@ -177,10 +171,8 @@ impl QueueOps for Queue {
     }
 
     fn remove(&self, id: &str) -> Result<(), QueueError> {
-        self.conn.execute(
-            "DELETE FROM heartbeats WHERE id = ?1",
-            params![id],
-        )?;
+        self.conn
+            .execute("DELETE FROM heartbeats WHERE id = ?1", params![id])?;
 
         // Log queue operation with metrics
         let current_count = self.count()?;
@@ -194,7 +186,12 @@ impl QueueOps for Queue {
         Ok(())
     }
 
-    fn update_sync_status(&self, id: &str, status: SyncStatus, metadata: Option<String>) -> Result<(), QueueError> {
+    fn update_sync_status(
+        &self,
+        id: &str,
+        status: SyncStatus,
+        metadata: Option<String>,
+    ) -> Result<(), QueueError> {
         let status_str: String = status.into();
 
         self.conn.execute(
@@ -223,11 +220,8 @@ impl QueueOps for Queue {
                 |row| row.get(0),
             )?
         } else {
-            self.conn.query_row(
-                "SELECT COUNT(*) FROM heartbeats",
-                [],
-                |row| row.get(0),
-            )?
+            self.conn
+                .query_row("SELECT COUNT(*) FROM heartbeats", [], |row| row.get(0))?
         };
 
         Ok(count)
@@ -237,7 +231,13 @@ impl QueueOps for Queue {
         let mut summary = SyncStatusSummary::default();
 
         // Get counts for each status
-        for status in &[SyncStatus::Pending, SyncStatus::Syncing, SyncStatus::Synced, SyncStatus::Failed, SyncStatus::PermanentFailure] {
+        for status in &[
+            SyncStatus::Pending,
+            SyncStatus::Syncing,
+            SyncStatus::Synced,
+            SyncStatus::Failed,
+            SyncStatus::PermanentFailure,
+        ] {
             let status_str: String = (*status).into();
             let count: usize = self.conn.query_row(
                 "SELECT COUNT(*) FROM heartbeats WHERE sync_status = ?1",
@@ -257,16 +257,25 @@ impl QueueOps for Queue {
         summary.total = self.count()?;
 
         // Get last sync attempt timestamp - handle NULL case properly
-        let last_sync: Option<String> = self.conn.query_row(
-            "SELECT MAX(last_attempt) FROM heartbeats WHERE last_attempt IS NOT NULL",
-            [],
-            |row| row.get::<_, Option<String>>(0),
-        ).ok().flatten();
+        let last_sync: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT MAX(last_attempt) FROM heartbeats WHERE last_attempt IS NOT NULL",
+                [],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten();
 
         if let Some(last_sync_str) = last_sync {
             // Parse the timestamp (SQLite format: YYYY-MM-DD HH:MM:SS)
-            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&last_sync_str, "%Y-%m-%d %H:%M:%S") {
-                summary.last_sync = Some(std::time::SystemTime::from(chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc)));
+            if let Ok(dt) =
+                chrono::NaiveDateTime::parse_from_str(&last_sync_str, "%Y-%m-%d %H:%M:%S")
+            {
+                summary.last_sync =
+                    Some(std::time::SystemTime::from(
+                        chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(dt, chrono::Utc),
+                    ));
             }
         }
 
@@ -352,10 +361,7 @@ impl QueueOps for Queue {
     }
 
     fn vacuum(&self) -> Result<(), QueueError> {
-        tracing::info!(
-            operation = "vacuum",
-            "Starting database vacuum operation"
-        );
+        tracing::info!(operation = "vacuum", "Starting database vacuum operation");
 
         self.conn.execute("VACUUM", [])?;
 
@@ -418,24 +424,27 @@ impl QueueOps for Queue {
     }
 
     fn get_retry_count(&self, id: &str) -> Result<u32, QueueError> {
-        let count: u32 = self.conn.query_row(
-            "SELECT retry_count FROM heartbeats WHERE id = ?1",
-            params![id],
-            |row| row.get(0),
-        ).optional()?.unwrap_or(0);
+        let count: u32 = self
+            .conn
+            .query_row(
+                "SELECT retry_count FROM heartbeats WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or(0);
 
         Ok(count)
     }
 
     fn count(&self) -> Result<usize, QueueError> {
-        let count: usize = self.conn.query_row(
-            "SELECT COUNT(*) FROM heartbeats",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: usize = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM heartbeats", [], |row| row.get(0))?;
 
         // Log queue size periodically for monitoring
-        if count.is_multiple_of(10) { // Log every 10 operations to avoid spam
+        if count.is_multiple_of(10) {
+            // Log every 10 operations to avoid spam
             tracing::debug!(
                 operation = "count",
                 queue_size = count,
@@ -493,7 +502,11 @@ impl Queue {
 
         // Get current schema version
         let current_version: i32 = conn
-            .query_row("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1", [], |row| row.get(0))
+            .query_row(
+                "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
             .optional()?
             .unwrap_or(0);
 
@@ -513,17 +526,11 @@ impl Queue {
             }
 
             if !columns.contains(&"sync_metadata".to_string()) {
-                conn.execute(
-                    "ALTER TABLE heartbeats ADD COLUMN sync_metadata TEXT",
-                    [],
-                )?;
+                conn.execute("ALTER TABLE heartbeats ADD COLUMN sync_metadata TEXT", [])?;
             }
 
             // Update schema version
-            conn.execute(
-                "INSERT INTO schema_version (version) VALUES (1)",
-                [],
-            )?;
+            conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
         }
 
         // Create indexes for sync performance
@@ -560,9 +567,7 @@ impl Queue {
                 }
                 Ok(conn)
             }
-            Err(e) => {
-                Self::attempt_database_recovery(db_path)
-            }
+            Err(e) => Self::attempt_database_recovery(db_path),
         }
     }
 
@@ -573,7 +578,10 @@ impl Queue {
         if result.to_lowercase() == "ok" {
             Ok(())
         } else {
-            Err(QueueError::DatabaseCorruption(format!("Database integrity check failed: {}", result)))
+            Err(QueueError::DatabaseCorruption(format!(
+                "Database integrity check failed: {}",
+                result
+            )))
         }
     }
 
@@ -591,7 +599,10 @@ impl Queue {
         // Remove corrupted database
         if db_path.exists() {
             std::fs::remove_file(db_path).map_err(|e| {
-                QueueError::DatabaseCorruption(format!("Failed to remove corrupted database: {}", e))
+                QueueError::DatabaseCorruption(format!(
+                    "Failed to remove corrupted database: {}",
+                    e
+                ))
             })?;
         }
 
@@ -640,8 +651,9 @@ impl Queue {
     }
 
     fn get_db_path() -> Result<PathBuf, QueueError> {
-        let mut chronova_dir = dirs::home_dir()
-            .ok_or_else(|| rusqlite::Error::InvalidPath("Could not determine home directory".to_string().into()))?;
+        let mut chronova_dir = dirs::home_dir().ok_or_else(|| {
+            rusqlite::Error::InvalidPath("Could not determine home directory".to_string().into())
+        })?;
 
         chronova_dir.push(".chronova");
         std::fs::create_dir_all(&chronova_dir)?;
@@ -661,7 +673,7 @@ impl Drop for Queue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     use rusqlite::Connection;
 
     #[test]
@@ -669,7 +681,7 @@ mod tests {
         // Test Database error
         let db_error = rusqlite::Error::SqliteFailure(
             rusqlite::ffi::Error::new(1),
-            Some("test error".to_string())
+            Some("test error".to_string()),
         );
         let queue_error = QueueError::Database(db_error);
         assert!(queue_error.to_string().contains("Database error:"));
@@ -687,29 +699,43 @@ mod tests {
 
         // Test sync-specific errors
         let sync_status_error = QueueError::SyncStatusNotFound("test-id".to_string());
-        assert!(sync_status_error.to_string().contains("Sync status not found for entry: test-id"));
+        assert!(sync_status_error
+            .to_string()
+            .contains("Sync status not found for entry: test-id"));
 
         let invalid_status_error = QueueError::InvalidSyncStatus("invalid".to_string());
-        assert!(invalid_status_error.to_string().contains("Invalid sync status: invalid"));
+        assert!(invalid_status_error
+            .to_string()
+            .contains("Invalid sync status: invalid"));
 
         let not_found_error = QueueError::EntryNotFound("test-id".to_string());
-        assert!(not_found_error.to_string().contains("Queue entry not found: test-id"));
+        assert!(not_found_error
+            .to_string()
+            .contains("Queue entry not found: test-id"));
 
         let queue_full_error = QueueError::QueueFull;
-        assert_eq!(queue_full_error.to_string(), "Queue is full, maximum capacity reached");
+        assert_eq!(
+            queue_full_error.to_string(),
+            "Queue is full, maximum capacity reached"
+        );
 
         let storage_limit_error = QueueError::StorageLimitExceeded;
         assert_eq!(storage_limit_error.to_string(), "Storage limit exceeded");
 
         let corruption_error = QueueError::DatabaseCorruption("corrupted data".to_string());
-        assert!(corruption_error.to_string().contains("Database corruption detected: corrupted data"));
+        assert!(corruption_error
+            .to_string()
+            .contains("Database corruption detected: corrupted data"));
     }
 
     #[test]
     fn test_queue_error_clone() {
         let queue_error = QueueError::QueueFull;
         // Since QueueError doesn't implement Clone, we test the string representation directly
-        assert_eq!(queue_error.to_string(), "Queue is full, maximum capacity reached");
+        assert_eq!(
+            queue_error.to_string(),
+            "Queue is full, maximum capacity reached"
+        );
     }
 
     #[test]
@@ -766,7 +792,8 @@ mod tests {
         let (_temp_dir, queue) = create_test_queue_with_old_schema()?;
 
         // Verify old schema doesn't have sync columns
-        let columns: Vec<String> = queue.conn
+        let columns: Vec<String> = queue
+            .conn
             .prepare("PRAGMA table_info(heartbeats)")?
             .query_map([], |row| row.get(1))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -780,13 +807,13 @@ mod tests {
             [],
         )?;
 
-        queue.conn.execute(
-            "ALTER TABLE heartbeats ADD COLUMN sync_metadata TEXT",
-            [],
-        )?;
+        queue
+            .conn
+            .execute("ALTER TABLE heartbeats ADD COLUMN sync_metadata TEXT", [])?;
 
         // Verify new columns exist
-        let columns: Vec<String> = queue.conn
+        let columns: Vec<String> = queue
+            .conn
             .prepare("PRAGMA table_info(heartbeats)")?
             .query_map([], |row| row.get(1))?
             .collect::<Result<Vec<_>, _>>()?;
@@ -808,12 +835,11 @@ mod tests {
         )?;
 
         // Verify default sync_status is 'pending'
-        let sync_status: String = queue.conn
-            .query_row(
-                "SELECT sync_status FROM heartbeats WHERE id = ?1",
-                ["test-id"],
-                |row| row.get(0),
-            )?;
+        let sync_status: String = queue.conn.query_row(
+            "SELECT sync_status FROM heartbeats WHERE id = ?1",
+            ["test-id"],
+            |row| row.get(0),
+        )?;
 
         assert_eq!(sync_status, "pending");
 
@@ -831,12 +857,11 @@ mod tests {
         )?;
 
         // Verify sync_metadata is NULL
-        let sync_metadata: Option<String> = queue.conn
-            .query_row(
-                "SELECT sync_metadata FROM heartbeats WHERE id = ?1",
-                ["test-id"],
-                |row| row.get(0),
-            )?;
+        let sync_metadata: Option<String> = queue.conn.query_row(
+            "SELECT sync_metadata FROM heartbeats WHERE id = ?1",
+            ["test-id"],
+            |row| row.get(0),
+        )?;
 
         assert!(sync_metadata.is_none());
 
@@ -896,12 +921,10 @@ mod tests {
         )?;
 
         // Verify version is stored
-        let version: i32 = queue.conn
-            .query_row(
-                "SELECT version FROM schema_version",
-                [],
-                |row| row.get(0),
-            )?;
+        let version: i32 =
+            queue
+                .conn
+                .query_row("SELECT version FROM schema_version", [], |row| row.get(0))?;
 
         assert_eq!(version, 1);
 
@@ -1047,7 +1070,11 @@ mod tests {
         queue.add(heartbeat.clone())?;
 
         // Update status to Syncing
-        queue.update_sync_status(&heartbeat.id, SyncStatus::Syncing, Some("syncing now".to_string()))?;
+        queue.update_sync_status(
+            &heartbeat.id,
+            SyncStatus::Syncing,
+            Some("syncing now".to_string()),
+        )?;
 
         // Verify the status was updated
         let pending = queue.get_pending(Some(10), Some(SyncStatus::Syncing))?;
@@ -1055,7 +1082,11 @@ mod tests {
         assert_eq!(pending[0].id, "test-1");
 
         // Update status to Synced
-        queue.update_sync_status(&heartbeat.id, SyncStatus::Synced, Some("success".to_string()))?;
+        queue.update_sync_status(
+            &heartbeat.id,
+            SyncStatus::Synced,
+            Some("success".to_string()),
+        )?;
 
         // Verify the status was updated again
         let synced = queue.get_pending(Some(10), Some(SyncStatus::Synced))?;
@@ -1174,7 +1205,8 @@ mod tests {
         assert_eq!(queue.count()?, 5);
 
         // Verify oldest entries were removed (test-0 through test-4 should be gone)
-        let remaining: Vec<String> = queue.conn
+        let remaining: Vec<String> = queue
+            .conn
             .prepare("SELECT id FROM heartbeats ORDER BY created_at ASC")?
             .query_map([], |row| row.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
