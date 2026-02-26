@@ -130,7 +130,7 @@ pub struct Cli {
     #[arg(long)]
     pub local_file: Option<String>,
 
-    /// Optional log file. Defaults to '~/.wakatime/wakatime.log'.
+    /// Optional log file. Defaults to '~/.chronova.log'.
     #[arg(long)]
     pub log_file: Option<String>,
 
@@ -162,7 +162,7 @@ pub struct Cli {
     #[arg(long)]
     pub metrics: bool,
 
-    /// Amount of offline activity to sync from your local ~/.wakatime/offline_heartbeats.bdb bolt file to your WakaTime Dashboard before exiting.
+    /// Amount of offline activity to sync from your local ~/.chronova/queue.db SQLite file to your WakaTime Dashboard before exiting.
     #[arg(long)]
     pub sync_offline_activity: Option<i32>,
 
