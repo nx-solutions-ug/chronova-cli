@@ -3,10 +3,7 @@ use dirs::home_dir;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
-#[cfg(not(test))]
 use crate::sync::SyncConfig;
-#[cfg(test)]
-use super::sync::SyncConfig;
 
 #[derive(Error, Debug)]
 pub enum ConfigError {
@@ -54,7 +51,11 @@ impl Config {
         ini.set_multiline(true);
 
         let config_map = ini.load(&config_path).map_err(|e| {
-            ConfigError::ParseError(format!("Failed to load config from {}: {}", config_path.display(), e))
+            ConfigError::ParseError(format!(
+                "Failed to load config from {}: {}",
+                config_path.display(),
+                e
+            ))
         })?;
 
         let settings = config_map.get("settings").cloned().unwrap_or_default();
@@ -62,58 +63,75 @@ impl Config {
         Ok(Config {
             api_key: settings.get("api_key").and_then(|v| v.clone()),
             api_url: settings.get("api_url").and_then(|v| v.clone()),
-            debug: settings.get("debug")
+            debug: settings
+                .get("debug")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             proxy: settings.get("proxy").and_then(|v| v.clone()),
-            hide_file_names: settings.get("hide_file_names")
+            hide_file_names: settings
+                .get("hide_file_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_project_names: settings.get("hide_project_names")
+            hide_project_names: settings
+                .get("hide_project_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_branch_names: settings.get("hide_branch_names")
+            hide_branch_names: settings
+                .get("hide_branch_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_project_folder: settings.get("hide_project_folder")
+            hide_project_folder: settings
+                .get("hide_project_folder")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            exclude_unknown_project: settings.get("exclude_unknown_project")
+            exclude_unknown_project: settings
+                .get("exclude_unknown_project")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            disable_offline: settings.get("offline")
+            disable_offline: settings
+                .get("offline")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .map(|v: bool| !v) // offline = true means disable_offline = false
                 .unwrap_or(false),
-            guess_language: settings.get("guess_language")
+            guess_language: settings
+                .get("guess_language")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             hostname: settings.get("hostname").and_then(|v| v.clone()),
             log_file: settings.get("log_file").and_then(|v| v.clone()),
-            no_ssl_verify: settings.get("no_ssl_verify")
+            no_ssl_verify: settings
+                .get("no_ssl_verify")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             ssl_certs_file: settings.get("ssl_certs_file").and_then(|v| v.clone()),
-            metrics: settings.get("metrics")
+            metrics: settings
+                .get("metrics")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            include_only_with_project_file: settings.get("include_only_with_project_file")
+            include_only_with_project_file: settings
+                .get("include_only_with_project_file")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             sync_config: Self::parse_sync_config(&settings),
-            ignore_patterns: settings.get("exclude")
+            ignore_patterns: settings
+                .get("exclude")
                 .and_then(|s| s.as_ref())
-                .map(|s| s.split('\n')
-                    .map(|line| line.trim().to_string())
-                    .filter(|line| !line.is_empty())
-                    .collect())
+                .map(|s| {
+                    s.split('\n')
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default(),
-            include_patterns: settings.get("include")
+            include_patterns: settings
+                .get("include")
                 .and_then(|s| s.as_ref())
-                .map(|s| s.split('\n')
-                    .map(|line| line.trim().to_string())
-                    .filter(|line| !line.is_empty())
-                    .collect())
+                .map(|s| {
+                    s.split('\n')
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default(),
         })
     }
@@ -158,11 +176,14 @@ impl Config {
     }
 
     pub fn get_api_url(&self) -> String {
-        self.api_url.clone()
+        self.api_url
+            .clone()
             .unwrap_or_else(|| "https://chronova.dev/api/v1".to_string())
     }
 
-    fn parse_sync_config(settings: &std::collections::HashMap<String, Option<String>>) -> SyncConfig {
+    fn parse_sync_config(
+        settings: &std::collections::HashMap<String, Option<String>>,
+    ) -> SyncConfig {
         let mut sync_config = SyncConfig::default();
 
         if let Some(enabled) = settings.get("sync_enabled") {
@@ -303,7 +324,10 @@ exclude =
 
         let config = Config::load(temp_file.path().to_str().unwrap()).unwrap();
         assert_eq!(config.api_key, Some("test_key_123".to_string()));
-        assert_eq!(config.api_url, Some("https://chronova.local:3000/api/v1".to_string()));
+        assert_eq!(
+            config.api_url,
+            Some("https://chronova.local:3000/api/v1".to_string())
+        );
         assert!(config.debug);
         assert!(config.hide_file_names);
         assert!(config.ignore_patterns.contains(&"*.tmp".to_string()));
@@ -324,10 +348,7 @@ exclude =
         );
 
         // Fall back to config key
-        assert_eq!(
-            config.get_api_key(None),
-            Some("config_key".to_string())
-        );
+        assert_eq!(config.get_api_key(None), Some("config_key".to_string()));
 
         // No key available
         let empty_config = Config::default();
