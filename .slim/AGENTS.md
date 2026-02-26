@@ -3,9 +3,10 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
+| 13e0435e-0d9e-44c8-8f2e-e399a763c5ba | ✅ change | Restore chronova.dev as default API URL | 2026-02-26 |
 | 484c0f57-31c6-4377-9156-0d103837209e | 🔵 discovery | Codebase scan reveals 11 files included in project scope | 2026-02-26 |
 
-**Key concepts:** code-scanning, project-cartography, code-mapping
+**Key concepts:** api-url, configuration-change, code-scanning, project-cartography, code-mapping
 
 💡 *Use `mem-find` to search full details across all sessions. Use `mem-create` to save important decisions.*
 <!-- /open-mem-context -->

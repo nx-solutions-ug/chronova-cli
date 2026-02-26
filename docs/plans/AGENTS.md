@@ -3,10 +3,11 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
+| 13e0435e-0d9e-44c8-8f2e-e399a763c5ba | ✅ change | Restore chronova.dev as default API URL | 2026-02-26 |
 | 773e0a3a-beec-41c1-9de2-b67ca70a8788 | 🔴 bugfix | Chronova CLI Code Quality Improvements | 2026-02-26 |
 | 28a9b9de-2f41-40ee-a686-d2eeb973681a | ⚖️ decision | Execution strategy for development plan | 2026-02-26 |
 
-**Key concepts:** code-review, duplicate-code, dead-code, import-path, api-url, documentation, error-handling, rust, development-plan, execution-strategy
+**Key concepts:** api-url, configuration-change, code-review, duplicate-code, dead-code, import-path, documentation, error-handling, rust, development-plan
 
 **Recent decisions:** Execution strategy for development plan
 

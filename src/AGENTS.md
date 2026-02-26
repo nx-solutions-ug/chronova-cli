@@ -3,12 +3,18 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
-| cce1c479-a26a-43f7-9a62-b4c4a3980440 | ✅ change | Uncommitted changes detected in Git repository | 2026-02-26 |
-| a4e74d9e-207e-4806-beda-b4139b292e95 | 🔄 refactor | Unused code and warnings detected during build | 2026-02-26 |
-| 6f0d4d51-916e-43e0-aba3-cb725908d084 | 🔵 discovery | Numerous Unused Code and Warnings in chronova-cli Project | 2026-02-26 |
-| cfd253a0-6a65-4ed3-8de2-c0edb01aecf5 | 🔴 bugfix | Resolve Mismatched Types and Unused Variables in Chronova CLI | 2026-02-26 |
+| b0b2c832-9d7f-4a25-868e-3649083475dc | 🔵 discovery | Chronova API URL Usage Identified | 2026-02-26 |
+| 13e0435e-0d9e-44c8-8f2e-e399a763c5ba | ✅ change | Restore chronova.dev as default API URL | 2026-02-26 |
+| 773ede2d-9d54-47d5-81fe-82419a30499a | 🟣 feature | Add API URL Configuration Option | 2026-02-26 |
+| 1373c5a5-e497-4904-b8ea-75316383cbf5 | 🟣 feature | Default configuration for Chronova CLI | 2026-02-26 |
+| 507bc5d3-aceb-4078-8994-d3caae8b37ce | 🔵 discovery | Default API URL for Wakatime integration identified | 2026-02-26 |
+| 0d82b9dd-c0c4-4479-aa8c-ca96fa7c5be0 | ✅ change | Update default API URL in Chronova CLI | 2026-02-26 |
+| 8b408fd3-b71a-483d-a7fd-909e390b92c5 | 🔴 bugfix | Unwrap syntax error in config.rs | 2026-02-26 |
+| d031d833-e81a-48e2-9863-0f572182b977 | ✅ change | Automated merge of Rust source file | 2026-02-26 |
+| 6817fd45-463a-4d42-bb32-36150493be9a | ✅ change | Git merge operation completed | 2026-02-26 |
+| bc7d3ff0-7e12-48ee-94a5-959fbf7a4ac2 | ✅ change | Code merge completed successfully | 2026-02-26 |
 
-**Key concepts:** git-status, uncommitted-changes, staging-area, dead-code-elimination, code-cleanup, rust-compiler-warnings, async-traits, code-quality, technical-debt, linting
+**Key concepts:** api-url, configuration, default-value, configuration-change, api-client, default-configuration, api-integration, ignore-patterns, api_url, api-endpoint
 
 💡 *Use `mem-find` to search full details across all sessions. Use `mem-create` to save important decisions.*
 <!-- /open-mem-context -->

@@ -3,10 +3,12 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
-| 6f0d4d51-916e-43e0-aba3-cb725908d084 | 🔵 discovery | Numerous Unused Code and Warnings in chronova-cli Project | 2026-02-26 |
-| cfd253a0-6a65-4ed3-8de2-c0edb01aecf5 | 🔴 bugfix | Resolve Mismatched Types and Unused Variables in Chronova CLI | 2026-02-26 |
+| 13e0435e-0d9e-44c8-8f2e-e399a763c5ba | ✅ change | Restore chronova.dev as default API URL | 2026-02-26 |
+| 0c63517f-3906-4b2c-bbfc-3ff72a9565bc | 🔄 refactor | Tests for wakatime_compatibility passed | 2026-02-26 |
+| 7ace9508-cc5f-4d42-8c8c-850683900c13 | ✅ change | Uncommitted changes detected | 2026-02-26 |
+| a69380bd-ab2a-4631-9a27-117fef56b2b1 | 🔵 discovery | Project file structure identified | 2026-02-26 |
 
-**Key concepts:** dead-code-elimination, code-quality, technical-debt, linting, rust-compiler-warnings, rust-compiler-errors, unused-variables, deprecated-functions, type-mismatch
+**Key concepts:** api-url, configuration-change, testing, integration-tests, git status, unversioned files, ahead of origin, file-organization, project-structure
 
 💡 *Use `mem-find` to search full details across all sessions. Use `mem-create` to save important decisions.*
 <!-- /open-mem-context -->
