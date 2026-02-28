@@ -35,18 +35,20 @@ impl DataCollector {
         let path = Path::new(entity_path);
 
         // 1) Prefer explicit project markers (git, Cargo.toml, package.json, etc.)
+        // But respect worktree boundaries - if we're in a worktree, use the main repo path.
         if let Some(root) = self.find_project_root(path) {
+            // Check if we're in a worktree and resolve to main repo if so
+            let root = self.get_project_root_respecting_worktree(&root);
             let name = self.extract_project_name(&root);
             return Some(ProjectInfo { name, root });
         }
 
         // 2) Try to discover a git repository root via libgit2; Repository::discover climbs parents.
-        if let Ok(repo) = Repository::discover(path) {
-            if let Some(workdir) = repo.workdir() {
-                let root = workdir.to_path_buf();
-                let name = self.extract_project_name(&root);
-                return Some(ProjectInfo { name, root });
-            }
+        // Use get_project_root_respecting_worktree to return the main repo path when in a worktree.
+        if Repository::discover(path).is_ok() {
+            let root = self.get_project_root_respecting_worktree(path);
+            let name = self.extract_project_name(&root);
+            return Some(ProjectInfo { name, root });
         }
 
         // 3) Heuristic: walk up ancestors looking for common source layout (e.g., 'src' directory) or package files.
@@ -250,6 +252,7 @@ impl DataCollector {
         None
     }
 
+    #[allow(dead_code)]
     fn find_git_root(&self, path: &Path) -> Option<PathBuf> {
         let mut current = path.parent()?;
 
@@ -373,10 +376,8 @@ impl DataCollector {
             }
         }
 
-        // Fallback: return the parent directory of the path
-        path.parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| path.to_path_buf())
+        // Fallback: return the path itself (it's already the project root from find_project_root)
+        path.to_path_buf()
     }
 }
 
@@ -803,6 +804,62 @@ mod tests {
 
         // Cleanup
         worktree.prune(None).ok();
+    }
+
+    #[tokio::test]
+    async fn test_detect_project_worktree_uses_main_repo_root() {
+        use git2::{Repository, Signature};
+
+        let main_dir = TempDir::new().unwrap();
+        let main_repo_path = main_dir.path().join("main-repo");
+        fs::create_dir_all(&main_repo_path).unwrap();
+
+        // Initialize main repo with package.json
+        let main_repo = Repository::init(&main_repo_path).unwrap();
+        fs::write(
+            main_repo_path.join("package.json"),
+            r#"{"name": "main-project"}"#,
+        )
+        .unwrap();
+
+        let file_path = main_repo_path.join("README.md");
+        fs::write(&file_path, "hello").unwrap();
+
+        let mut index = main_repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = main_repo.find_tree(tree_oid).unwrap();
+        let sig = Signature::now("Test", "test@example.com").unwrap();
+        main_repo
+            .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+            .unwrap();
+
+        // Create a worktree
+        let worktree_path = main_dir.path().join("worktree");
+        main_repo
+            .worktree("branch-1", &worktree_path, None)
+            .unwrap();
+
+        // Create a file in the worktree
+        let worktree_file = worktree_path.join("src").join("test.rs");
+        fs::create_dir_all(worktree_file.parent().unwrap()).unwrap();
+        fs::write(&worktree_file, "// test").unwrap();
+
+        let collector = DataCollector::new();
+        let project_info = collector
+            .detect_project(worktree_file.to_str().unwrap())
+            .await
+            .unwrap();
+
+        // The project root should be the main repo, not the worktree
+        assert_eq!(
+            project_info.root, main_repo_path,
+            "Project root should be main repo"
+        );
+        assert_eq!(
+            project_info.name, "main-project",
+            "Project name should come from main repo"
+        );
     }
 
     #[test]

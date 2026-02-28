@@ -18,4 +18,4 @@ pub use cli::Cli;
 pub use config::Config;
 pub use heartbeat::HeartbeatManager;
 pub use queue::Queue;
-pub use sync::{ChronovaSyncManager, PerformanceMetrics, SyncResult, SyncConfig};
+pub use sync::{ChronovaSyncManager, PerformanceMetrics, SyncConfig, SyncResult};

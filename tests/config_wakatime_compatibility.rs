@@ -27,7 +27,7 @@ pub struct Config {
 impl Config {
     pub fn load(config_path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         use configparser::ini::Ini;
-        
+
         let mut ini = Ini::new();
         ini.set_multiline(true);
 
@@ -37,56 +37,73 @@ impl Config {
         Ok(Config {
             api_key: settings.get("api_key").and_then(|v| v.clone()),
             api_url: settings.get("api_url").and_then(|v| v.clone()),
-            debug: settings.get("debug")
+            debug: settings
+                .get("debug")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_file_names: settings.get("hide_file_names")
+            hide_file_names: settings
+                .get("hide_file_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_project_names: settings.get("hide_project_names")
+            hide_project_names: settings
+                .get("hide_project_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_branch_names: settings.get("hide_branch_names")
+            hide_branch_names: settings
+                .get("hide_branch_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            hide_project_folder: settings.get("hide_project_folder")
+            hide_project_folder: settings
+                .get("hide_project_folder")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            exclude_unknown_project: settings.get("exclude_unknown_project")
+            exclude_unknown_project: settings
+                .get("exclude_unknown_project")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            disable_offline: settings.get("offline")
+            disable_offline: settings
+                .get("offline")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .map(|v: bool| !v) // offline = true means disable_offline = false
                 .unwrap_or(false),
-            guess_language: settings.get("guess_language")
+            guess_language: settings
+                .get("guess_language")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             hostname: settings.get("hostname").and_then(|v| v.clone()),
             log_file: settings.get("log_file").and_then(|v| v.clone()),
-            no_ssl_verify: settings.get("no_ssl_verify")
+            no_ssl_verify: settings
+                .get("no_ssl_verify")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             ssl_certs_file: settings.get("ssl_certs_file").and_then(|v| v.clone()),
-            metrics: settings.get("metrics")
+            metrics: settings
+                .get("metrics")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            include_only_with_project_file: settings.get("include_only_with_project_file")
+            include_only_with_project_file: settings
+                .get("include_only_with_project_file")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
-            ignore_patterns: settings.get("exclude")
+            ignore_patterns: settings
+                .get("exclude")
                 .and_then(|s| s.as_ref())
-                .map(|s| s.split('\n')
-                    .map(|line| line.trim().to_string())
-                    .filter(|line| !line.is_empty())
-                    .collect())
+                .map(|s| {
+                    s.split('\n')
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default(),
-            include_patterns: settings.get("include")
+            include_patterns: settings
+                .get("include")
                 .and_then(|s| s.as_ref())
-                .map(|s| s.split('\n')
-                    .map(|line| line.trim().to_string())
-                    .filter(|line| !line.is_empty())
-                    .collect())
+                .map(|s| {
+                    s.split('\n')
+                        .map(|line| line.trim().to_string())
+                        .filter(|line| !line.is_empty())
+                        .collect()
+                })
                 .unwrap_or_default(),
         })
     }
@@ -126,9 +143,12 @@ include =
     fs::write(config_file.path(), config_content).unwrap();
 
     let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
-    
+
     assert_eq!(config.api_key, Some("test_key_123".to_string()));
-    assert_eq!(config.api_url, Some("https://test.example.com/api".to_string()));
+    assert_eq!(
+        config.api_url,
+        Some("https://test.example.com/api".to_string())
+    );
     assert!(config.debug);
     assert!(config.hide_file_names);
     assert!(!config.hide_project_names);
@@ -140,15 +160,20 @@ include =
     assert_eq!(config.hostname, Some("test-host".to_string()));
     assert_eq!(config.log_file, Some("/tmp/wakatime.log".to_string()));
     assert!(!config.no_ssl_verify);
-    assert_eq!(config.ssl_certs_file, Some("/etc/ssl/certs.pem".to_string()));
+    assert_eq!(
+        config.ssl_certs_file,
+        Some("/etc/ssl/certs.pem".to_string())
+    );
     assert!(config.metrics);
     assert!(!config.include_only_with_project_file);
-    
+
     // Check exclude patterns
     assert!(config.ignore_patterns.contains(&"*.tmp".to_string()));
     assert!(config.ignore_patterns.contains(&"*.log".to_string()));
-    assert!(config.ignore_patterns.contains(&"COMMIT_EDITMSG$".to_string()));
-    
+    assert!(config
+        .ignore_patterns
+        .contains(&"COMMIT_EDITMSG$".to_string()));
+
     // Check include patterns
     assert!(config.include_patterns.contains(&"*.rs".to_string()));
     assert!(config.include_patterns.contains(&"*.js".to_string()));
@@ -166,7 +191,7 @@ api_key = test_key_123
     fs::write(config_file.path(), config_content).unwrap();
 
     let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
-    
+
     assert_eq!(config.api_key, Some("test_key_123".to_string()));
     // Check that defaults are applied
     assert!(!config.debug);
@@ -187,7 +212,7 @@ offline = true
 
     let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
     assert!(!config.disable_offline); // offline = true means disable_offline = false
-    
+
     // Test with offline = false
     let config_file2 = NamedTempFile::new().unwrap();
     let config_content2 = r#"

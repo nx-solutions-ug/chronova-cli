@@ -7,8 +7,8 @@ use chronova_cli::{
     sync::SyncStatus,
 };
 use std::time::{Duration, SystemTime};
-use uuid::Uuid;
 use tempfile::TempDir;
+use uuid::Uuid;
 
 fn create_test_heartbeat(id: &str, time: f64) -> Heartbeat {
     Heartbeat {
@@ -65,7 +65,7 @@ async fn test_large_queue_performance() {
     for i in 0..num_heartbeats {
         let heartbeat = create_test_heartbeat(
             &Uuid::new_v4().to_string(),
-            chrono::Utc::now().timestamp_millis() as f64 / 1000.0
+            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
         );
 
         queue.add(heartbeat).unwrap();
@@ -98,7 +98,10 @@ async fn test_large_queue_performance() {
     let query_duration = start_time.elapsed().unwrap();
 
     assert_eq!(pending.len(), num_heartbeats);
-    println!("Retrieved {} heartbeats in {:?}", num_heartbeats, query_duration);
+    println!(
+        "Retrieved {} heartbeats in {:?}",
+        num_heartbeats, query_duration
+    );
 
     // Performance requirement: query should complete in under 2 seconds
     assert!(
@@ -132,7 +135,7 @@ async fn test_sequential_queue_operations() {
     for i in 0..num_heartbeats {
         let heartbeat = create_test_heartbeat(
             &format!("seq-{}", i),
-            chrono::Utc::now().timestamp_millis() as f64 / 1000.0
+            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
         );
 
         queue.add(heartbeat).unwrap();
@@ -145,7 +148,10 @@ async fn test_sequential_queue_operations() {
 
     let duration = start_time.elapsed().unwrap();
 
-    println!("Added {} heartbeats sequentially in {:?}", num_heartbeats, duration);
+    println!(
+        "Added {} heartbeats sequentially in {:?}",
+        num_heartbeats, duration
+    );
 
     // Verify all heartbeats were added
     let stats = queue.get_sync_stats().unwrap();
@@ -181,7 +187,7 @@ async fn test_memory_usage_large_queue() {
     for i in 0..num_heartbeats {
         let heartbeat = create_test_heartbeat(
             &format!("large-{}", i),
-            chrono::Utc::now().timestamp_millis() as f64 / 1000.0
+            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
         );
 
         queue.add(heartbeat).unwrap();
@@ -194,7 +200,10 @@ async fn test_memory_usage_large_queue() {
 
     assert_eq!(pending.len(), num_heartbeats);
 
-    println!("Memory test: Queried {} large heartbeats in {:?}", num_heartbeats, query_duration);
+    println!(
+        "Memory test: Queried {} large heartbeats in {:?}",
+        num_heartbeats, query_duration
+    );
 
     // Performance should remain reasonable even with larger data
     assert!(
@@ -225,7 +234,7 @@ async fn test_sync_performance_large_queue() {
     for i in 0..num_heartbeats {
         let heartbeat = create_test_heartbeat(
             &format!("sync-{}", i),
-            chrono::Utc::now().timestamp_millis() as f64 / 1000.0
+            chrono::Utc::now().timestamp_millis() as f64 / 1000.0,
         );
 
         queue.add(heartbeat.clone()).unwrap();
@@ -239,7 +248,9 @@ async fn test_sync_performance_large_queue() {
         };
 
         if status != SyncStatus::Pending {
-            queue.update_sync_status(&heartbeat.id, status, Some("test".to_string())).unwrap();
+            queue
+                .update_sync_status(&heartbeat.id, status, Some("test".to_string()))
+                .unwrap();
         }
     }
 
@@ -248,7 +259,10 @@ async fn test_sync_performance_large_queue() {
     let _stats = queue.get_sync_stats().unwrap();
     let stats_duration = start_time.elapsed().unwrap();
 
-    println!("Sync stats query took {:?} for {} heartbeats", stats_duration, num_heartbeats);
+    println!(
+        "Sync stats query took {:?} for {} heartbeats",
+        stats_duration, num_heartbeats
+    );
 
     // Stats query should be very fast
     assert!(
@@ -259,7 +273,9 @@ async fn test_sync_performance_large_queue() {
 
     // Test filtering by status
     let start_time = SystemTime::now();
-    let _pending = queue.get_pending(Some(num_heartbeats), Some(SyncStatus::Pending)).unwrap();
+    let _pending = queue
+        .get_pending(Some(num_heartbeats), Some(SyncStatus::Pending))
+        .unwrap();
     let filter_duration = start_time.elapsed().unwrap();
 
     println!("Status filtering took {:?}", filter_duration);
@@ -290,7 +306,7 @@ async fn test_cleanup_performance() {
         let heartbeat = create_test_heartbeat(
             &format!("old-{}", i),
             // Use a timestamp that's 10 days old (864000 seconds)
-            chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - 864000.0
+            chrono::Utc::now().timestamp_millis() as f64 / 1000.0 - 864000.0,
         );
 
         queue.add(heartbeat).unwrap();
@@ -308,7 +324,10 @@ async fn test_cleanup_performance() {
     let removed = queue.cleanup_old_entries(0).unwrap();
     let cleanup_duration = start_time.elapsed().unwrap();
 
-    println!("Cleaned up {} old entries in {:?}", removed, cleanup_duration);
+    println!(
+        "Cleaned up {} old entries in {:?}",
+        removed, cleanup_duration
+    );
 
     assert_eq!(removed, num_heartbeats);
 
