@@ -938,9 +938,13 @@ mod tests {
             .await
             .unwrap();
 
+        // Canonicalize both paths to handle platform differences (e.g., /private prefix on macOS)
+        let canonical_project_root = fs::canonicalize(&project_info.root).unwrap();
+        let canonical_main_repo = fs::canonicalize(&main_repo_path).unwrap();
+
         // The project root should be the main repo, not the worktree
         assert_eq!(
-            project_info.root, main_repo_path,
+            canonical_project_root, canonical_main_repo,
             "Project root should be main repo"
         );
         assert_eq!(
