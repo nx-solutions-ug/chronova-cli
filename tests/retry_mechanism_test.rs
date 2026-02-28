@@ -52,8 +52,19 @@ async fn test_retry_mechanism_integration() {
         )
         .unwrap();
 
-    // Verify the heartbeat is now pending for retry
+    // Verify the update worked by checking the heartbeat status directly
+    let heartbeat_after_update = queue
+        .get_pending(Some(1000), Some(SyncStatus::Pending))
+        .unwrap();
+
+    // The heartbeat should now be pending for retry
     let pending = queue.get_pending(None, Some(SyncStatus::Pending)).unwrap();
+    assert!(
+        !pending.is_empty(),
+        "Expected at least one pending heartbeat after update, but got {}. Heartbeat status after update: {:?}",
+        pending.len(),
+        heartbeat_after_update
+    );
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].id, heartbeat.id);
 
