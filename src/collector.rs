@@ -213,8 +213,15 @@ impl DataCollector {
                 .and_then(|h| h.shorthand().map(|s| s.to_string()))
         };
 
-        // Get commit info from the main repo
-        let head = repo.head().ok();
+        // Get commit info from the worktree's HEAD (not main repo's HEAD)
+        // Worktrees share the object database with main repo, so we can use
+        // main repo for object lookup but need worktree's HEAD for commit info
+        let repo_at_path = match Repository::discover(path) {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+
+        let head = repo_at_path.head().ok();
         let commit = head.and_then(|h| h.peel_to_commit().ok());
         let commit_hash = commit.as_ref().map(|c| c.id().to_string());
         let commit_author = commit
