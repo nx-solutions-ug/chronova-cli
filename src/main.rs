@@ -221,7 +221,7 @@ async fn main() -> Result<()> {
     });
 
     // Handle sync offline activity
-    if let Some(count) = cli.sync_offline_activity {
+    if let Some(_count) = cli.sync_offline_activity {
         // Check if JSON output is requested - if so, disable stdout logging to avoid corrupting JSON
         let json_output = cli
             .output
@@ -320,7 +320,7 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
                 // Use print! instead of println! to avoid adding extra newline for JSON output
                 print!("{}", serde_json::to_string(&json_output)?);
             }
-            "text" | _ => {
+            _ => {
                 // Default text output
                 let output = chronova_cli::api::format_today_output(
                     &statusbar_data,
