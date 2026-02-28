@@ -125,10 +125,16 @@ async fn test_worktree_full_flow() {
         .await
         .expect("Failed to detect project");
 
+    // Canonicalize paths for comparison (handles /private prefix on macOS)
+    let canonical_project_root = std::fs::canonicalize(&project.root).unwrap();
+    let canonical_worktree = std::fs::canonicalize(&worktree_path).unwrap();
+    let canonical_main_repo = std::fs::canonicalize(&main_repo_path).unwrap();
+
     // The project root should be the worktree path (where the file is)
     // because detect_project finds the nearest project root
     assert!(
-        project.root == worktree_path || project.root == main_repo_path,
+        canonical_project_root == canonical_worktree
+            || canonical_project_root == canonical_main_repo,
         "Project root should be either worktree or main repo, got: {:?}",
         project.root
     );
