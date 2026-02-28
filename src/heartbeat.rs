@@ -3,13 +3,13 @@ use uuid::Uuid;
 
 // Import types that are used in this module
 // These will work in both main crate and test contexts
-use crate::cli::Cli;
-use crate::config::Config;
-use crate::collector::DataCollector;
 use crate::api::ApiClient;
+use crate::cli::Cli;
+use crate::collector::DataCollector;
+use crate::config::Config;
 use crate::queue::{Queue, QueueOps};
+use crate::sync::{SyncResult, SyncStatusSummary};
 use crate::user_agent::generate_user_agent;
-use crate::sync::{SyncStatusSummary, SyncResult};
 use anyhow::Result;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +44,6 @@ pub struct Heartbeat {
     pub dependencies: Vec<String>,
 }
 
-
 pub struct HeartbeatManager {
     config: Config,
     api_client: ApiClient,
@@ -52,14 +51,14 @@ pub struct HeartbeatManager {
     queue: Queue,
     collector: DataCollector,
 }
- 
+
 /// Minimal editor information attached to a heartbeat
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EditorInfo {
     pub name: String,
     pub version: Option<String>,
 }
- 
+
 /// Minimal operating system information attached to a heartbeat
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OsInfo {
@@ -71,13 +70,15 @@ pub struct OsInfo {
 impl HeartbeatManager {
     pub fn new(config: Config) -> Self {
         let api_client = ApiClient::new(config.get_api_url());
-        let authenticated_api_client = config.get_api_key(None).map(|key| api_client.clone().with_api_key(key));
+        let authenticated_api_client = config
+            .get_api_key(None)
+            .map(|key| api_client.clone().with_api_key(key));
         let queue = Queue::new().expect("Failed to initialize queue");
         // Ensure a fresh queue state for newly constructed managers (helps tests/isolation)
         // Ignore any error here — best effort cleanup to avoid leaking state between runs.
         let _ = queue.cleanup_old_entries(0);
         let collector = DataCollector::new();
- 
+
         Self {
             config,
             api_client,
@@ -106,7 +107,8 @@ impl HeartbeatManager {
             let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
             q.add(heartbeat).map_err(|e| anyhow::anyhow!(e))?;
             Ok(())
-        }).await??;
+        })
+        .await??;
         tracing::debug!("Heartbeat queued for offline-first processing");
 
         // Process any queued heartbeats using sync strategy
@@ -116,9 +118,9 @@ impl HeartbeatManager {
     }
 
     async fn create_heartbeat(&self, cli: Cli, entity: String) -> Result<Heartbeat, anyhow::Error> {
-        let time = cli.time.unwrap_or_else(|| {
-            chrono::Utc::now().timestamp_millis() as f64 / 1000.0
-        });
+        let time = cli
+            .time
+            .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
 
         // Collect additional data
         let project_info = self.collector.detect_project(&entity).await;
@@ -129,46 +131,50 @@ impl HeartbeatManager {
         // Note: We no longer parse plugin info here as the API handles this
 
         // Determine project name with priority: cli.project > alternate_project > detected project
-        let project_name = cli.project
-            .or(cli.alternate_project)
-            .or_else(|| project_info.as_ref().map(|p| {
-                p.root.file_name()
+        let project_name = cli.project.or(cli.alternate_project).or_else(|| {
+            project_info.as_ref().map(|p| {
+                p.root
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "unknown".to_string())
-            }));
+            })
+        });
 
         // Determine branch with priority: cli.branch > git branch
-        let branch = cli.branch.or_else(|| git_info.as_ref().and_then(|g| g.branch.clone()));
+        let branch = cli
+            .branch
+            .or_else(|| git_info.as_ref().and_then(|g| g.branch.clone()));
 
         // Determine language with priority: cli.language > detected language
         let language_name = cli.language.or(language);
 
         Ok(Heartbeat {
-                id: Uuid::new_v4().to_string(),
-                entity,
-                entity_type: cli.entity_type,
-                time,
-                project: project_name,
-                branch,
-                language: language_name,
-                is_write: cli.write.unwrap_or(false),
-                lines: cli.lines,
-                lineno: cli.lineno,
-                cursorpos: cli.cursorpos,
-                user_agent: Some(generate_user_agent(cli.plugin.as_deref())),
-                category: cli.category,
-                machine: cli.hostname.or_else(|| Some(gethostname::gethostname().to_string_lossy().into_owned())),
-                editor: None,
-                operating_system: None,
-                commit_hash: git_info.as_ref().and_then(|g| g.commit_hash.clone()),
-                commit_author: git_info.as_ref().and_then(|g| g.commit_author.clone()),
-                commit_message: git_info.as_ref().and_then(|g| g.commit_message.clone()),
-                repository_url: git_info.as_ref().and_then(|g| g.repository_url.clone()),
-                dependencies: Vec::new(),
-            })
+            id: Uuid::new_v4().to_string(),
+            entity,
+            entity_type: cli.entity_type,
+            time,
+            project: project_name,
+            branch,
+            language: language_name,
+            is_write: cli.write.unwrap_or(false),
+            lines: cli.lines,
+            lineno: cli.lineno,
+            cursorpos: cli.cursorpos,
+            user_agent: Some(generate_user_agent(cli.plugin.as_deref())),
+            category: cli.category,
+            machine: cli
+                .hostname
+                .or_else(|| Some(gethostname::gethostname().to_string_lossy().into_owned())),
+            editor: None,
+            operating_system: None,
+            commit_hash: git_info.as_ref().and_then(|g| g.commit_hash.clone()),
+            commit_author: git_info.as_ref().and_then(|g| g.commit_author.clone()),
+            commit_message: git_info.as_ref().and_then(|g| g.commit_message.clone()),
+            repository_url: git_info.as_ref().and_then(|g| g.repository_url.clone()),
+            dependencies: Vec::new(),
+        })
     }
-
 
     fn should_ignore_entity(&self, entity: &str) -> bool {
         // Simple pattern matching for ignore rules
@@ -196,40 +202,51 @@ impl HeartbeatManager {
         // Combine the "prepare retry-eligible failures" pass and the "fetch pending" call
         // into a single blocking task so the DB is opened only once per loop iteration.
         let batch_size: usize = 50;
- 
+
         // Counters to return to callers
         let mut total_synced: usize = 0;
         let mut total_failed: usize = 0;
- 
+
         loop {
             // Single blocking operation: prepare retry-eligible failed heartbeats and fetch a batch of pending
             let queued = tokio::task::spawn_blocking({
                 let batch_size = batch_size;
                 move || -> Result<Vec<Heartbeat>, anyhow::Error> {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
- 
+
                     // Prepare failed -> pending for retry (single DB connection)
-                    let failed = q.get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed)).map_err(|e| anyhow::anyhow!(e))?;
+                    let failed = q
+                        .get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed))
+                        .map_err(|e| anyhow::anyhow!(e))?;
                     for hb in failed {
                         let current_retry_count = q.get_retry_count(&hb.id).unwrap_or(0);
                         if current_retry_count < 3 {
-                            q.update_sync_status(&hb.id,
+                            q.update_sync_status(
+                                &hb.id,
                                 crate::sync::SyncStatus::Pending,
-                                Some(format!("Retry eligible (attempt {})", current_retry_count))).map_err(|e| anyhow::anyhow!(e))?;
+                                Some(format!("Retry eligible (attempt {})", current_retry_count)),
+                            )
+                            .map_err(|e| anyhow::anyhow!(e))?;
                         }
                     }
- 
+
                     // Now fetch the next batch of pending heartbeats for processing
-                    q.get_pending(Some(batch_size), None).map_err(|e| anyhow::anyhow!(e))
+                    q.get_pending(Some(batch_size), None)
+                        .map_err(|e| anyhow::anyhow!(e))
                 }
-            }).await??;
- 
+            })
+            .await??;
+
             if queued.is_empty() {
                 break;
             }
- 
-            tracing::info!("Processing {} queued heartbeats (batch size {})", queued.len(), batch_size);
- 
+
+            tracing::info!(
+                "Processing {} queued heartbeats (batch size {})",
+                queued.len(),
+                batch_size
+            );
+
             // If more than one heartbeat, try to send as a batch for efficiency
             if queued.len() > 1 {
                 // Mark all as syncing (do it in a single blocking operation)
@@ -238,13 +255,17 @@ impl HeartbeatManager {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
                     for id in queued_ids {
                         let retry_count = q.get_retry_count(&id).map_err(|e| anyhow::anyhow!(e))?;
-                        q.update_sync_status(&id,
+                        q.update_sync_status(
+                            &id,
                             crate::sync::SyncStatus::Syncing,
-                            Some(format!("Attempting sync (attempt {})", retry_count + 1))).map_err(|e| anyhow::anyhow!(e))?;
+                            Some(format!("Attempting sync (attempt {})", retry_count + 1)),
+                        )
+                        .map_err(|e| anyhow::anyhow!(e))?;
                     }
                     Ok(())
-                }).await??;
- 
+                })
+                .await??;
+
                 // Log which IDs are being sent in this batch for debugging
                 let queued_ids_dbg = queued.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
                 tracing::debug!("Attempting batch send for ids: {:?}", queued_ids_dbg);
@@ -254,7 +275,7 @@ impl HeartbeatManager {
                     self.api_client.send_heartbeats_batch(&queued).await
                 };
                 tracing::debug!("Batch send result success: {}", send_result.is_ok());
- 
+
                 match send_result {
                     Ok(_) => {
                         // Success: mark all as synced and remove them (single blocking op)
@@ -263,17 +284,21 @@ impl HeartbeatManager {
                         tokio::task::spawn_blocking(move || -> Result<(), anyhow::Error> {
                             let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
                             for id in queued_ids {
-                                q.update_sync_status(&id,
+                                q.update_sync_status(
+                                    &id,
                                     crate::sync::SyncStatus::Synced,
-                                    Some("Successfully synced".to_string())).map_err(|e| anyhow::anyhow!(e))?;
+                                    Some("Successfully synced".to_string()),
+                                )
+                                .map_err(|e| anyhow::anyhow!(e))?;
                                 q.remove(&id).map_err(|e| anyhow::anyhow!(e))?;
                             }
                             Ok(())
-                        }).await??;
- 
+                        })
+                        .await??;
+
                         // Account for synced items
                         total_synced += synced_len;
- 
+
                         // Continue to next batch
                         continue;
                     }
@@ -284,18 +309,23 @@ impl HeartbeatManager {
                             // Simple backoff strategy: wait based on queue size to avoid hammering the server
                             // Note: use bounded backoff here to avoid long blocking in caller
                             let backoff_secs = 60u64; // base 60s for rate-limits on batch failure
-                            tracing::warn!("Rate limited on batch sync, sleeping {}s before retrying batch", backoff_secs);
+                            tracing::warn!(
+                                "Rate limited on batch sync, sleeping {}s before retrying batch",
+                                backoff_secs
+                            );
                             tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
                             // After sleeping, retry this batch once more (will loop)
                             continue;
                         } else {
                             // For other errors, fall back to per-heartbeat send so we can granularly retry/mark permanent
-                            tracing::debug!("Falling back to per-heartbeat sync after batch failure");
+                            tracing::debug!(
+                                "Falling back to per-heartbeat sync after batch failure"
+                            );
                         }
                     }
                 }
             }
- 
+
             // Process items individually (either because batch failed or batch size == 1)
             // Collect successful ids to apply final DB updates in a single blocking operation.
             let mut synced_ids: Vec<String> = Vec::new();
@@ -310,30 +340,43 @@ impl HeartbeatManager {
                     for id in ids {
                         let rc = q.get_retry_count(&id).unwrap_or(0);
                         // Best-effort: mark as syncing with next attempt info
-                        let _ = q.update_sync_status(&id,
+                        let _ = q.update_sync_status(
+                            &id,
                             crate::sync::SyncStatus::Syncing,
-                            Some(format!("Attempting sync (attempt {})", rc + 1)));
+                            Some(format!("Attempting sync (attempt {})", rc + 1)),
+                        );
                         map.insert(id.clone(), rc);
                     }
                     Ok(map)
                 }
-            }).await??;
+            })
+            .await??;
             for heartbeat in queued {
                 // Use prefetched retry count and previously set syncing status
                 let retry_count: u32 = *retry_map.get(&heartbeat.id).unwrap_or(&0);
- 
-                tracing::debug!("Attempting individual send for heartbeat id: {}", heartbeat.id);
+
+                tracing::debug!(
+                    "Attempting individual send for heartbeat id: {}",
+                    heartbeat.id
+                );
                 let send_result = if let Some(auth_client) = &self.authenticated_api_client {
                     auth_client.send_heartbeat(&heartbeat).await
                 } else {
                     self.api_client.send_heartbeat(&heartbeat).await
                 };
-                tracing::debug!("Individual send result for {} success: {}", heartbeat.id, send_result.is_ok());
- 
+                tracing::debug!(
+                    "Individual send result for {} success: {}",
+                    heartbeat.id,
+                    send_result.is_ok()
+                );
+
                 match send_result {
                     Ok(_) => {
                         // Defer DB updates/removal for successful sends and batch-apply later
-                        tracing::debug!("Queued heartbeat marked for finalization: {}", heartbeat.id);
+                        tracing::debug!(
+                            "Queued heartbeat marked for finalization: {}",
+                            heartbeat.id
+                        );
                         synced_ids.push(heartbeat.id.clone());
                         total_synced += 1;
                     }
@@ -341,16 +384,21 @@ impl HeartbeatManager {
                         // Rate-limit handling: apply backoff and retry in-memory once before incrementing retry count
                         if let crate::api::ApiError::RateLimit(_) = e {
                             let backoff_secs = 2u64.pow(std::cmp::min(retry_count as u32, 6)) * 5; // exponential backoff capped
-                            tracing::warn!("Heartbeat {} rate-limited, backing off {}s before retry", heartbeat.id, backoff_secs);
+                            tracing::warn!(
+                                "Heartbeat {} rate-limited, backing off {}s before retry",
+                                heartbeat.id,
+                                backoff_secs
+                            );
                             tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
- 
+
                             // Try once more after backoff
-                            let retry_send = if let Some(auth_client) = &self.authenticated_api_client {
-                                auth_client.send_heartbeat(&heartbeat).await
-                            } else {
-                                self.api_client.send_heartbeat(&heartbeat).await
-                            };
- 
+                            let retry_send =
+                                if let Some(auth_client) = &self.authenticated_api_client {
+                                    auth_client.send_heartbeat(&heartbeat).await
+                                } else {
+                                    self.api_client.send_heartbeat(&heartbeat).await
+                                };
+
                             if retry_send.is_ok() {
                                 // Defer final DB update/removal to the consolidated batch finalization.
                                 // This avoids opening the DB in a per-item blocking task even in the rare backoff-success path.
@@ -362,7 +410,7 @@ impl HeartbeatManager {
                             }
                             // If still failing, fallthrough to increment retry below
                         }
- 
+
                         // Defer retry increment and status updates to a consolidated blocking operation
                         // to avoid opening the DB per-failure and to improve atomicity.
                         let id = heartbeat.id.clone();
@@ -371,30 +419,39 @@ impl HeartbeatManager {
                     }
                 }
             }
- 
+
             // Consolidate failure updates (increment retry + set status) in one blocking operation
             if !failed_updates.is_empty() {
                 let updates = failed_updates.clone();
-                let perm_count: usize = tokio::task::spawn_blocking(move || -> Result<usize, anyhow::Error> {
-                    let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-                    let mut perm = 0usize;
-                    for (id, err_meta) in updates {
-                        // Increment retry and read new count
-                        let _ = q.increment_retry(&id);
-                        let rc = q.get_retry_count(&id).unwrap_or(0);
-                        if rc >= 3 {
-                            let _ = q.update_sync_status(&id,
-                                crate::sync::SyncStatus::PermanentFailure,
-                                Some(format!("Permanent failure after {} attempts: {}", rc, err_meta)));
-                            perm += 1;
-                        } else {
-                            let _ = q.update_sync_status(&id,
-                                crate::sync::SyncStatus::Failed,
-                                Some(format!("Sync failed (attempt {}): {}", rc, err_meta)));
+                let perm_count: usize =
+                    tokio::task::spawn_blocking(move || -> Result<usize, anyhow::Error> {
+                        let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
+                        let mut perm = 0usize;
+                        for (id, err_meta) in updates {
+                            // Increment retry and read new count
+                            let _ = q.increment_retry(&id);
+                            let rc = q.get_retry_count(&id).unwrap_or(0);
+                            if rc >= 3 {
+                                let _ = q.update_sync_status(
+                                    &id,
+                                    crate::sync::SyncStatus::PermanentFailure,
+                                    Some(format!(
+                                        "Permanent failure after {} attempts: {}",
+                                        rc, err_meta
+                                    )),
+                                );
+                                perm += 1;
+                            } else {
+                                let _ = q.update_sync_status(
+                                    &id,
+                                    crate::sync::SyncStatus::Failed,
+                                    Some(format!("Sync failed (attempt {}): {}", rc, err_meta)),
+                                );
+                            }
                         }
-                    }
-                    Ok(perm)
-                }).await??;
+                        Ok(perm)
+                    })
+                    .await??;
 
                 // Account for newly permanent failures
                 total_failed += perm_count;
@@ -406,16 +463,20 @@ impl HeartbeatManager {
                 tokio::task::spawn_blocking(move || -> Result<(), anyhow::Error> {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
                     for id in final_ids {
-                        q.update_sync_status(&id,
+                        q.update_sync_status(
+                            &id,
                             crate::sync::SyncStatus::Synced,
-                            Some("Successfully synced".to_string())).map_err(|e| anyhow::anyhow!(e))?;
+                            Some("Successfully synced".to_string()),
+                        )
+                        .map_err(|e| anyhow::anyhow!(e))?;
                         q.remove(&id).map_err(|e| anyhow::anyhow!(e))?;
                     }
                     Ok(())
-                }).await??;
+                })
+                .await??;
             }
         }
- 
+
         Ok((total_synced, total_failed))
     }
 
@@ -424,26 +485,33 @@ impl HeartbeatManager {
         // Run the prepare pass inside a single blocking task so we open the DB once
         let retry_count: usize = tokio::task::spawn_blocking(|| -> Result<usize, anyhow::Error> {
             let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-            let failed = q.get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed)).map_err(|e| anyhow::anyhow!(e))?;
-    
+            let failed = q
+                .get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed))
+                .map_err(|e| anyhow::anyhow!(e))?;
+
             let mut prepared = 0usize;
             for hb in failed {
-                let current_retry_count = q.get_retry_count(&hb.id).map_err(|e| anyhow::anyhow!(e))?;
+                let current_retry_count =
+                    q.get_retry_count(&hb.id).map_err(|e| anyhow::anyhow!(e))?;
                 if current_retry_count < 3 {
-                    q.update_sync_status(&hb.id,
+                    q.update_sync_status(
+                        &hb.id,
                         crate::sync::SyncStatus::Pending,
-                        Some(format!("Retry eligible (attempt {})", current_retry_count))).map_err(|e| anyhow::anyhow!(e))?;
+                        Some(format!("Retry eligible (attempt {})", current_retry_count)),
+                    )
+                    .map_err(|e| anyhow::anyhow!(e))?;
                     prepared += 1;
                 }
             }
-    
+
             Ok(prepared)
-        }).await??;
-    
+        })
+        .await??;
+
         if retry_count > 0 {
             tracing::info!("Prepared {} failed heartbeats for retry", retry_count);
         }
-    
+
         Ok(())
     }
 }
@@ -500,9 +568,9 @@ impl HeartbeatManagerExt for HeartbeatManager {
             end_time: Some(end_time),
             avg_latency_ms: if (synced_count + failed_count) > 0 {
                 Some(duration.as_millis() as f64 / (synced_count + failed_count) as f64)
-                } else {
-                    None
-                },
+            } else {
+                None
+            },
         })
     }
 }
@@ -528,14 +596,10 @@ impl HeartbeatManager {
 mod tests {
     use super::*;
 
-
     #[test]
     fn test_should_ignore_entity() {
         let config = Config {
-            ignore_patterns: vec![
-                "COMMIT_EDITMSG$".to_string(),
-                "*.tmp".to_string(),
-            ],
+            ignore_patterns: vec!["COMMIT_EDITMSG$".to_string(), "*.tmp".to_string()],
             ..Default::default()
         };
 
@@ -557,7 +621,10 @@ mod tests {
         // Test that HeartbeatManagerExt is implemented by calling methods directly
         let stats = manager.get_queue_stats();
         assert!(stats.is_ok(), "get_queue_stats should return Ok");
-        assert!(true, "HeartbeatManager should implement HeartbeatManagerExt");
+        assert!(
+            true,
+            "HeartbeatManager should implement HeartbeatManagerExt"
+        );
     }
 
     #[test]
@@ -584,14 +651,17 @@ mod tests {
         assert!(result.is_ok(), "manual_sync should return Ok");
 
         let sync_result = result.unwrap();
-        assert_eq!(sync_result.synced_count, 0, "No heartbeats to sync initially");
+        assert_eq!(
+            sync_result.synced_count, 0,
+            "No heartbeats to sync initially"
+        );
     }
 
     #[tokio::test]
     async fn test_manual_sync_with_mock_server_batches() {
         use crate::api::ApiClient;
-        use wiremock::{Mock, MockServer, ResponseTemplate};
         use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
 
         // Start mock server that will accept batch POSTs
         let mock_server = MockServer::start().await;
@@ -670,6 +740,9 @@ mod tests {
         let sync = res.unwrap();
 
         // Expect both to have been processed
-        assert_eq!(sync.synced_count, 2, "Both queued heartbeats should be synced");
+        assert_eq!(
+            sync.synced_count, 2,
+            "Both queued heartbeats should be synced"
+        );
     }
 }

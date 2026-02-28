@@ -1,8 +1,8 @@
+use base64::{engine::general_purpose, Engine as _};
 use reqwest::{Client, Response};
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
-use serde::{Deserialize, Serialize};
-use base64::{Engine as _, engine::general_purpose};
 
 use crate::heartbeat::Heartbeat;
 
@@ -169,7 +169,10 @@ impl ApiClient {
 
     pub async fn send_heartbeat(&self, heartbeat: &Heartbeat) -> Result<Response, ApiError> {
         // Try Chronova endpoint first
-        let url = format!("{}/users/current/heartbeats", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/users/current/heartbeats",
+            self.base_url.trim_end_matches('/')
+        );
 
         tracing::debug!("Trying Chronova endpoint: {}", url);
 
@@ -179,9 +182,7 @@ impl ApiClient {
             request_builder = request_builder.header("User-Agent", user_agent);
         }
 
-        let response = request_builder
-            .send()
-            .await;
+        let response = request_builder.send().await;
 
         match response {
             Ok(response) if response.status().is_success() => {
@@ -211,12 +212,21 @@ impl ApiClient {
         }
 
         // If we get here, the Chronova endpoint failed (or no fallback implemented)
-        Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
+        Err(ApiError::Api(
+            "All endpoint attempts failed".to_string(),
+            "No valid API endpoint found".to_string(),
+        ))
     }
 
-    pub async fn send_heartbeats_batch(&self, heartbeats: &[Heartbeat]) -> Result<Response, ApiError> {
+    pub async fn send_heartbeats_batch(
+        &self,
+        heartbeats: &[Heartbeat],
+    ) -> Result<Response, ApiError> {
         // Try Chronova endpoint first
-        let url = format!("{}/users/current/heartbeats", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/users/current/heartbeats",
+            self.base_url.trim_end_matches('/')
+        );
 
         // Use user agent from first heartbeat if available (batched heartbeats typically come from same editor session)
         let user_agent = heartbeats.first().and_then(|h| h.user_agent.as_ref());
@@ -236,7 +246,10 @@ impl ApiClient {
         }
 
         // If we get here, the Chronova endpoint failed
-        Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
+        Err(ApiError::Api(
+            "All endpoint attempts failed".to_string(),
+            "No valid API endpoint found".to_string(),
+        ))
     }
 
     pub fn with_api_key(self, api_key: String) -> AuthenticatedApiClient {
@@ -258,7 +271,10 @@ impl ApiClient {
             Ok(response) => {
                 // Any successful response (even 4xx/5xx) indicates connectivity
                 // We just need to know if we can reach the server
-                tracing::debug!("Connectivity check successful, status: {}", response.status());
+                tracing::debug!(
+                    "Connectivity check successful, status: {}",
+                    response.status()
+                );
                 Ok(true)
             }
             Err(e) => {
@@ -279,12 +295,16 @@ pub struct AuthenticatedApiClient {
 impl AuthenticatedApiClient {
     pub async fn send_heartbeat(&self, heartbeat: &Heartbeat) -> Result<Response, ApiError> {
         // Try Chronova endpoint first with Bearer token
-        let url = format!("{}/users/current/heartbeats", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/users/current/heartbeats",
+            self.base_url.trim_end_matches('/')
+        );
 
         tracing::debug!("Trying Chronova endpoint with Bearer token: {}", url);
 
         // Build request with user agent if available
-        let mut request_builder = self.client
+        let mut request_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(heartbeat);
@@ -292,15 +312,16 @@ impl AuthenticatedApiClient {
             request_builder = request_builder.header("User-Agent", user_agent);
         }
 
-        let response = request_builder
-            .send()
-            .await;
+        let response = request_builder.send().await;
 
         if let Ok(response) = response {
             if response.status().is_success() {
                 return Ok(response);
             } else {
-                tracing::debug!("Chronova endpoint with Bearer token failed with status: {}", response.status());
+                tracing::debug!(
+                    "Chronova endpoint with Bearer token failed with status: {}",
+                    response.status()
+                );
             }
         }
 
@@ -309,7 +330,8 @@ impl AuthenticatedApiClient {
         tracing::debug!("Trying Chronova endpoint with Basic Auth: {}", url);
 
         // Build request with user agent if available
-        let mut request_builder = self.client
+        let mut request_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Basic {}", encoded_key))
             .json(heartbeat);
@@ -317,15 +339,16 @@ impl AuthenticatedApiClient {
             request_builder = request_builder.header("User-Agent", user_agent);
         }
 
-        let response = request_builder
-            .send()
-            .await;
+        let response = request_builder.send().await;
 
         if let Ok(response) = response {
             if response.status().is_success() {
                 return Ok(response);
             } else {
-                tracing::debug!("Chronova endpoint with Basic Auth failed with status: {}", response.status());
+                tracing::debug!(
+                    "Chronova endpoint with Basic Auth failed with status: {}",
+                    response.status()
+                );
             }
         }
 
@@ -333,7 +356,8 @@ impl AuthenticatedApiClient {
         tracing::debug!("Trying Chronova endpoint with X-API-Key header: {}", url);
 
         // Build request with user agent if available
-        let mut request_builder = self.client
+        let mut request_builder = self
+            .client
             .post(&url)
             .header("X-API-Key", &self.api_key)
             .json(heartbeat);
@@ -341,31 +365,42 @@ impl AuthenticatedApiClient {
             request_builder = request_builder.header("User-Agent", user_agent);
         }
 
-        let response = request_builder
-            .send()
-            .await;
+        let response = request_builder.send().await;
 
         if let Ok(response) = response {
             if response.status().is_success() {
                 return Ok(response);
             } else {
-                tracing::debug!("Chronova endpoint with X-API-Key header failed with status: {}", response.status());
+                tracing::debug!(
+                    "Chronova endpoint with X-API-Key header failed with status: {}",
+                    response.status()
+                );
             }
         }
 
         // If we get here, all Chronova endpoint attempts failed
-        Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
+        Err(ApiError::Api(
+            "All endpoint attempts failed".to_string(),
+            "No valid API endpoint found".to_string(),
+        ))
     }
 
-    pub async fn send_heartbeats_batch(&self, heartbeats: &[Heartbeat]) -> Result<Response, ApiError> {
+    pub async fn send_heartbeats_batch(
+        &self,
+        heartbeats: &[Heartbeat],
+    ) -> Result<Response, ApiError> {
         // Try Chronova endpoint first with Bearer token
-        let url = format!("{}/users/current/heartbeats", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/users/current/heartbeats",
+            self.base_url.trim_end_matches('/')
+        );
 
         // Use user agent from first heartbeat if available (batched heartbeats typically come from same editor session)
         let user_agent = heartbeats.first().and_then(|h| h.user_agent.as_ref());
 
         // Build request with user agent if available
-        let mut request_builder = self.client
+        let mut request_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .json(heartbeats);
@@ -385,7 +420,8 @@ impl AuthenticatedApiClient {
         let encoded_key = general_purpose::STANDARD.encode(format!("{}:", self.api_key));
 
         // Build request with user agent if available
-        let mut request_builder = self.client
+        let mut request_builder = self
+            .client
             .post(&url)
             .header("Authorization", format!("Basic {}", encoded_key))
             .json(heartbeats);
@@ -403,7 +439,8 @@ impl AuthenticatedApiClient {
 
         // Try X-API-Key header (WakaTime compatibility)
         // Build request with user agent if available
-        let mut request_builder = self.client
+        let mut request_builder = self
+            .client
             .post(&url)
             .header("X-API-Key", &self.api_key)
             .json(heartbeats);
@@ -420,14 +457,21 @@ impl AuthenticatedApiClient {
         }
 
         // If we get here, all Chronova endpoint attempts failed
-        Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
+        Err(ApiError::Api(
+            "All endpoint attempts failed".to_string(),
+            "No valid API endpoint found".to_string(),
+        ))
     }
 
     pub async fn get_today_stats(&self) -> Result<StatsResponse, ApiError> {
         // Try Chronova endpoint first with Bearer token
-        let url = format!("{}/users/current/stats/today", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/users/current/stats/today",
+            self.base_url.trim_end_matches('/')
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
@@ -442,7 +486,8 @@ impl AuthenticatedApiClient {
 
         // Try Basic Auth (WakaTime compatibility)
         let encoded_key = general_purpose::STANDARD.encode(format!("{}:", self.api_key));
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", format!("Basic {}", encoded_key))
             .send()
@@ -456,7 +501,8 @@ impl AuthenticatedApiClient {
         }
 
         // Try X-API-Key header (WakaTime compatibility)
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
@@ -470,14 +516,21 @@ impl AuthenticatedApiClient {
         }
 
         // If we get here, all Chronova endpoint attempts failed
-        Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
+        Err(ApiError::Api(
+            "All endpoint attempts failed".to_string(),
+            "No valid API endpoint found".to_string(),
+        ))
     }
 
     pub async fn get_today_statusbar(&self) -> Result<StatusBarResponse, ApiError> {
         // Try Chronova endpoint first with Bearer token
-        let url = format!("{}/users/current/statusbar/today", self.base_url.trim_end_matches('/'));
+        let url = format!(
+            "{}/users/current/statusbar/today",
+            self.base_url.trim_end_matches('/')
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
@@ -508,7 +561,8 @@ impl AuthenticatedApiClient {
 
         // Try Basic Auth (WakaTime compatibility)
         let encoded_key = general_purpose::STANDARD.encode(format!("{}:", self.api_key));
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", format!("Basic {}", encoded_key))
             .send()
@@ -522,7 +576,8 @@ impl AuthenticatedApiClient {
         }
 
         // Try X-API-Key header (WakaTime compatibility)
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("X-API-Key", &self.api_key)
             .send()
@@ -537,7 +592,10 @@ impl AuthenticatedApiClient {
 
         // Try WakaTime compatibility endpoint with Bearer token
         // If we get here, all Chronova endpoint attempts failed
-        Err(ApiError::Api("All endpoint attempts failed".to_string(), "No valid API endpoint found".to_string()))
+        Err(ApiError::Api(
+            "All endpoint attempts failed".to_string(),
+            "No valid API endpoint found".to_string(),
+        ))
     }
 
     async fn handle_response(&self, response: Response) -> Result<Response, ApiError> {
@@ -579,7 +637,10 @@ impl AuthenticatedApiClient {
             Ok(response) => {
                 // Any successful response (even 4xx/5xx) indicates connectivity
                 // We just need to know if we can reach the server
-                tracing::debug!("Connectivity check successful, status: {}", response.status());
+                tracing::debug!(
+                    "Connectivity check successful, status: {}",
+                    response.status()
+                );
                 Ok(true)
             }
             Err(e) => {
@@ -666,8 +727,8 @@ fn format_today_output_from_full(data: &StatusBarData, hide_categories: bool) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiremock::{Mock, MockServer, ResponseTemplate};
     use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn test_send_heartbeat_success() {
@@ -757,6 +818,12 @@ mod tests {
         let result = client.send_heartbeat(&heartbeat).await;
         // Previous behavior returned ApiError::Network; new behavior returns ApiError::Api when
         // no compatibility fallback is available. Assert that we do not get Ok.
-        assert!(matches!(result, Err(ApiError::Api(_, _)) | Err(ApiError::RateLimit(_)) | Err(ApiError::Auth(_)) | Err(ApiError::Network(_))));
+        assert!(matches!(
+            result,
+            Err(ApiError::Api(_, _))
+                | Err(ApiError::RateLimit(_))
+                | Err(ApiError::Auth(_))
+                | Err(ApiError::Network(_))
+        ));
     }
 }

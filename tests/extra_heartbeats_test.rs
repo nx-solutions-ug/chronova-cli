@@ -46,11 +46,11 @@ api_key = test-key-123
 
     // Test that the command succeeds with external heartbeat data (missing id)
     cmd.arg("--config")
-       .arg(config_file.path())
-       .arg("--extra-heartbeats")
-       .write_stdin(heartbeat_data)
-       .assert()
-       .success();
+        .arg(config_file.path())
+        .arg("--extra-heartbeats")
+        .write_stdin(heartbeat_data)
+        .assert()
+        .success();
 }
 
 #[test]
@@ -98,11 +98,11 @@ api_key = test-key-123
 
     // Test that the command succeeds with heartbeat data including id
     cmd.arg("--config")
-       .arg(config_file.path())
-       .arg("--extra-heartbeats")
-       .write_stdin(heartbeat_data)
-       .assert()
-       .success();
+        .arg(config_file.path())
+        .arg("--extra-heartbeats")
+        .write_stdin(heartbeat_data)
+        .assert()
+        .success();
 }
 
 #[test]
@@ -128,9 +128,9 @@ api_key = test-key-123
 
     // Test that the command fails with invalid JSON
     cmd.arg("--config")
-       .arg(config_file.path())
-       .arg("--extra-heartbeats")
-       .write_stdin(invalid_data)
-       .assert()
-       .failure();
+        .arg(config_file.path())
+        .arg("--extra-heartbeats")
+        .write_stdin(invalid_data)
+        .assert()
+        .failure();
 }

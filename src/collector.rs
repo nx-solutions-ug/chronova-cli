@@ -120,19 +120,39 @@ impl DataCollector {
     pub async fn detect_git_info(&self, entity_path: &str) -> Option<GitInfo> {
         let path = Path::new(entity_path);
 
-        // Use git2 to discover repository from the entity path.
-        // Wrap all operations so failures gracefully return None.
-        let repo = match Repository::discover(path) {
+        // Resolve the main repository path, respecting worktree boundaries.
+        // This ensures commit info comes from the main repo while branch detection
+        // still works correctly for worktrees.
+        let main_repo_path = self.get_project_root_respecting_worktree(path);
+
+        // Open the main repository for commit info
+        let repo = match Repository::open(&main_repo_path) {
             Ok(r) => r,
             Err(_) => return None,
         };
 
-        // Try to get HEAD and the commit it points to
-        let head = repo.head().ok();
-        let branch = head
-            .as_ref()
-            .and_then(|h| h.shorthand().map(|s| s.to_string()));
+        // For branch detection in worktrees, we need to discover from the original path
+        // to get the worktree's HEAD (which may differ from main repo's HEAD)
+        let branch = if main_repo_path != path && main_repo_path != path.parent().unwrap_or(path) {
+            // We're in a worktree - discover the worktree's repository for branch detection
+            if let Ok(worktree_repo) = Repository::discover(path) {
+                if let Ok(head) = worktree_repo.head() {
+                    head.shorthand().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            // Not in a worktree - use the main repo's HEAD
+            repo.head()
+                .ok()
+                .and_then(|h| h.shorthand().map(|s| s.to_string()))
+        };
 
+        // Get commit info from the main repo
+        let head = repo.head().ok();
         let commit = head.and_then(|h| h.peel_to_commit().ok());
         let commit_hash = commit.as_ref().map(|c| c.id().to_string());
         let commit_author = commit
@@ -852,6 +872,55 @@ mod tests {
             "Normal repo should return its own workdir, got: {:?}",
             normal_result
         );
+
+        // Cleanup
+        worktree.prune(None).ok();
+    }
+
+    #[tokio::test]
+    async fn test_detect_git_info_worktree_uses_main_repo() {
+        use git2::{Repository, Signature};
+
+        let main_dir = TempDir::new().unwrap();
+        let main_repo_path = main_dir.path().join("main-repo");
+        fs::create_dir_all(&main_repo_path).unwrap();
+
+        // Initialize main repo and make a commit
+        let main_repo = Repository::init(&main_repo_path).unwrap();
+
+        let file_path = main_repo_path.join("README.md");
+        fs::write(&file_path, "hello").unwrap();
+
+        let mut index = main_repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = main_repo.find_tree(tree_oid).unwrap();
+        let sig = Signature::now("Test Author", "author@example.com").unwrap();
+        let commit_oid = main_repo
+            .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
+
+        // Create a worktree
+        let worktree_path = main_dir.path().join("worktree");
+        let worktree = main_repo
+            .worktree("feature-branch", &worktree_path, None)
+            .unwrap();
+
+        // Create a file in worktree
+        let feature_file = worktree_path.join("feature.rs");
+        fs::write(&feature_file, "// feature").unwrap();
+
+        let collector = DataCollector::new();
+        let info = collector
+            .detect_git_info(feature_file.to_str().unwrap())
+            .await;
+
+        assert!(info.is_some(), "Should detect git info from worktree");
+        let info = info.unwrap();
+        assert_eq!(info.commit_hash, Some(commit_oid.to_string()));
+        assert_eq!(info.commit_message, Some("initial commit".to_string()));
+        assert_eq!(info.commit_author, Some("Test Author".to_string()));
+        assert_eq!(info.branch, Some("feature-branch".to_string()));
 
         // Cleanup
         worktree.prune(None).ok();
