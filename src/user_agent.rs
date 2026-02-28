@@ -3,8 +3,8 @@
 //! This module generates user agent strings that are compatible with Wakatime's format:
 //! `chronova/{version} ({os}-{core}-{platform}) {runtime} {plugin}`
 
-use sysinfo::System;
 use std::env;
+use sysinfo::System;
 
 /// Generates a user agent string compatible with Wakatime's format
 ///
@@ -50,12 +50,7 @@ pub fn generate_user_agent(plugin: Option<&str>) -> String {
     // client/version (os-core-platform) runtime plugin1 plugin2
     format!(
         "chronova/{} ({}-{}-{}) {} {}",
-        version,
-        os_info.os,
-        os_info.core,
-        os_info.platform,
-        runtime,
-        plugin_part
+        version, os_info.os, os_info.core, os_info.platform, runtime, plugin_part
     )
 }
 
@@ -63,7 +58,7 @@ pub fn generate_user_agent(plugin: Option<&str>) -> String {
 fn sanitize_plugin_string(plugin: &str) -> String {
     // Remove surrounding quotes if present
     if plugin.starts_with('"') && plugin.ends_with('"') && plugin.len() >= 2 {
-        plugin[1..plugin.len()-1].to_string()
+        plugin[1..plugin.len() - 1].to_string()
     } else {
         plugin.to_string()
     }
@@ -83,7 +78,11 @@ fn get_os_info() -> OsInfo {
     let kernel_version = System::kernel_version().unwrap_or_else(|| "unknown".to_string());
 
     // For compatibility with Wakatime format, we need to format this appropriately
-    let os = format!("{}-{}", os_name.to_lowercase(), kernel_version.to_lowercase());
+    let os = format!(
+        "{}-{}",
+        os_name.to_lowercase(),
+        kernel_version.to_lowercase()
+    );
 
     // Core and platform info - simplified for now
     let core = os_version.to_lowercase();
@@ -93,11 +92,7 @@ fn get_os_info() -> OsInfo {
         arch => arch.to_string(),
     };
 
-    OsInfo {
-        os,
-        core,
-        platform,
-    }
+    OsInfo { os, core, platform }
 }
 
 /// Gets runtime information
@@ -118,7 +113,11 @@ mod tests {
         // Check that it contains the basic structure with parentheses and runtime info
         assert!(ua.contains("(") && ua.contains(")"));
         assert!(ua.contains("rustc/"));
-        assert!(ua.ends_with(&format!("chronova-cli/{} chronova-cli/{}", env!("CARGO_PKG_VERSION"), env!("CARGO_PKG_VERSION"))));
+        assert!(ua.ends_with(&format!(
+            "chronova-cli/{} chronova-cli/{}",
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_VERSION")
+        )));
     }
 
     #[test]
@@ -146,23 +145,33 @@ mod tests {
     #[test]
     fn test_sanitize_plugin_string() {
         // Test with quotes
-        assert_eq!(sanitize_plugin_string("\"vscode/1.106.3 vscode-wakatime/25.5.0\""),
-                   "vscode/1.106.3 vscode-wakatime/25.5.0");
+        assert_eq!(
+            sanitize_plugin_string("\"vscode/1.106.3 vscode-wakatime/25.5.0\""),
+            "vscode/1.106.3 vscode-wakatime/25.5.0"
+        );
 
         // Test without quotes
-        assert_eq!(sanitize_plugin_string("vscode/1.106.3 vscode-wakatime/25.5.0"),
-                   "vscode/1.106.3 vscode-wakatime/25.5.0");
+        assert_eq!(
+            sanitize_plugin_string("vscode/1.106.3 vscode-wakatime/25.5.0"),
+            "vscode/1.106.3 vscode-wakatime/25.5.0"
+        );
 
         // Test with single quote (should not be removed)
-        assert_eq!(sanitize_plugin_string("'vscode/1.106.3 vscode-wakatime/25.5.0'"),
-                   "'vscode/1.106.3 vscode-wakatime/25.5.0'");
+        assert_eq!(
+            sanitize_plugin_string("'vscode/1.106.3 vscode-wakatime/25.5.0'"),
+            "'vscode/1.106.3 vscode-wakatime/25.5.0'"
+        );
 
         // Test with only opening quote (should not be removed)
-        assert_eq!(sanitize_plugin_string("\"vscode/1.106.3 vscode-wakatime/25.5.0"),
-                   "\"vscode/1.106.3 vscode-wakatime/25.5.0");
+        assert_eq!(
+            sanitize_plugin_string("\"vscode/1.106.3 vscode-wakatime/25.5.0"),
+            "\"vscode/1.106.3 vscode-wakatime/25.5.0"
+        );
 
         // Test with only closing quote (should not be removed)
-        assert_eq!(sanitize_plugin_string("vscode/1.106.3 vscode-wakatime/25.5.0\""),
-                   "vscode/1.106.3 vscode-wakatime/25.5.0\"");
+        assert_eq!(
+            sanitize_plugin_string("vscode/1.106.3 vscode-wakatime/25.5.0\""),
+            "vscode/1.106.3 vscode-wakatime/25.5.0\""
+        );
     }
 }

@@ -7,9 +7,9 @@ use tempfile::NamedTempFile;
 fn test_wakatime_help_compatibility() {
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
     cmd.arg("--help");
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("A high-performance, drop-in replacement for wakatime-cli"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "A high-performance, drop-in replacement for wakatime-cli",
+    ));
 }
 
 #[test]
@@ -24,9 +24,7 @@ fn test_wakatime_version_compatibility() {
 #[test]
 fn test_wakatime_entity_argument() {
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
-    cmd.arg("--entity")
-        .arg("/tmp/test.rs")
-        .arg("--verbose");
+    cmd.arg("--entity").arg("/tmp/test.rs").arg("--verbose");
     // With offline heartbeats support, this should succeed and queue the heartbeat
     cmd.assert()
         .success()
@@ -55,7 +53,7 @@ exclude =
         .arg("--entity")
         .arg("/tmp/test.rs")
         .arg("--verbose");
-    
+
     // With offline heartbeats support, this should succeed and queue the heartbeat
     cmd.assert()
         .success()
@@ -70,7 +68,7 @@ fn test_wakatime_plugin_argument() {
         .arg("--plugin")
         .arg("vscode/1.88.0 vscode-wakatime/24.0.0")
         .arg("--verbose");
-    
+
     // With offline heartbeats support, this should succeed and queue the heartbeat
     cmd.assert()
         .success()
@@ -79,23 +77,29 @@ fn test_wakatime_plugin_argument() {
 
 #[tokio::test]
 async fn test_wakatime_today_flag() {
-    use wiremock::{Mock, MockServer, ResponseTemplate};
     use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // Start mock server and mount a simple statusbar/today endpoint
     let mock_server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/users/current/statusbar/today"))
-        .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"text":"4 mins","has_team_features":false}"#))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"text":"4 mins","has_team_features":false}"#),
+        )
         .mount(&mock_server)
         .await;
 
     // Create a temporary config that points api_url to the mock server and includes an api_key
     let config_file = NamedTempFile::new().unwrap();
-    let config_content = format!(r#"[settings]
+    let config_content = format!(
+        r#"[settings]
 api_key = test_key_123
 api_url = {}
-"#, mock_server.uri());
+"#,
+        mock_server.uri()
+    );
     fs::write(config_file.path(), config_content).unwrap();
 
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
@@ -103,7 +107,7 @@ api_url = {}
         .arg("--verbose")
         .arg("--config")
         .arg(config_file.path());
-    
+
     // This should succeed and show a concise time string (e.g., "4 mins", "1 hour 2 mins")
     cmd.assert()
         .success()
@@ -117,7 +121,7 @@ fn test_wakatime_write_flag() {
         .arg("/tmp/test.rs")
         .arg("--write")
         .arg("--verbose");
-    
+
     // With offline heartbeats support, this should succeed and queue the heartbeat
     cmd.assert()
         .success()

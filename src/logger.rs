@@ -1,20 +1,23 @@
+use dirs::home_dir;
 use std::fs::OpenOptions;
 use std::io;
 use std::path::PathBuf;
-use dirs::home_dir;
 use tracing::Level;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{
     fmt::{self, format::Writer, time::FormatTime},
     prelude::*,
     EnvFilter,
 };
-use tracing_appender::non_blocking::WorkerGuard;
 
 pub fn setup_logging(verbose: bool) -> Result<WorkerGuard, io::Error> {
     setup_logging_with_output_format(verbose, false)
 }
 
-pub fn setup_logging_with_output_format(verbose: bool, json_output: bool) -> Result<WorkerGuard, io::Error> {
+pub fn setup_logging_with_output_format(
+    verbose: bool,
+    json_output: bool,
+) -> Result<WorkerGuard, io::Error> {
     let log_file = get_log_file_path()?;
 
     // Create log file directory if it doesn't exist
@@ -48,7 +51,7 @@ pub fn setup_logging_with_output_format(verbose: bool, json_output: bool) -> Res
         // When JSON output is requested, we must ensure stdout is completely clean
         // Only set up file logging and avoid any stdout contamination
         let registry = tracing_subscriber::registry().with(file_layer);
-        
+
         // Set the global default subscriber
         if tracing::subscriber::set_global_default(registry).is_err() {
             // If we can't set the global default, a subscriber is already set
@@ -63,7 +66,7 @@ pub fn setup_logging_with_output_format(verbose: bool, json_output: bool) -> Res
             .with_ansi(true)
             .with_timer(ChronoLocalTimer)
             .with_filter(env_filter);
-        
+
         let registry = tracing_subscriber::registry()
             .with(file_layer)
             .with(stdout_layer);

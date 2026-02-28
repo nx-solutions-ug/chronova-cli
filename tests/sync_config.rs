@@ -34,7 +34,7 @@ impl Default for SyncConfig {
 // Simple test implementation that mimics the real Config::load behavior
 fn parse_sync_config(settings: &std::collections::HashMap<String, Option<String>>) -> SyncConfig {
     let mut sync_config = SyncConfig::default();
-    
+
     if let Some(enabled) = settings.get("sync_enabled") {
         if let Some(value) = enabled.as_ref() {
             if let Ok(parsed) = value.parse::<bool>() {
@@ -139,13 +139,25 @@ fn test_sync_config_clone() {
     };
 
     let sync_config2 = sync_config1.clone();
-    
+
     assert_eq!(sync_config1.enabled, sync_config2.enabled);
     assert_eq!(sync_config1.max_queue_size, sync_config2.max_queue_size);
-    assert_eq!(sync_config1.sync_interval_seconds, sync_config2.sync_interval_seconds);
-    assert_eq!(sync_config1.max_retry_attempts, sync_config2.max_retry_attempts);
-    assert_eq!(sync_config1.retry_base_delay_seconds, sync_config2.retry_base_delay_seconds);
-    assert_eq!(sync_config1.retry_max_delay_seconds, sync_config2.retry_max_delay_seconds);
+    assert_eq!(
+        sync_config1.sync_interval_seconds,
+        sync_config2.sync_interval_seconds
+    );
+    assert_eq!(
+        sync_config1.max_retry_attempts,
+        sync_config2.max_retry_attempts
+    );
+    assert_eq!(
+        sync_config1.retry_base_delay_seconds,
+        sync_config2.retry_base_delay_seconds
+    );
+    assert_eq!(
+        sync_config1.retry_max_delay_seconds,
+        sync_config2.retry_max_delay_seconds
+    );
     assert_eq!(sync_config1.retry_use_jitter, sync_config2.retry_use_jitter);
     assert_eq!(sync_config1.retention_days, sync_config2.retention_days);
     assert_eq!(sync_config1.background_sync, sync_config2.background_sync);
@@ -155,7 +167,7 @@ fn test_sync_config_clone() {
 fn test_sync_config_debug() {
     let sync_config = SyncConfig::default();
     let debug_output = format!("{:?}", sync_config);
-    
+
     assert!(debug_output.contains("enabled"));
     assert!(debug_output.contains("max_queue_size"));
     assert!(debug_output.contains("sync_interval_seconds"));
@@ -171,7 +183,7 @@ fn test_sync_config_debug() {
 #[test]
 fn test_parse_sync_config() {
     use std::collections::HashMap;
-    
+
     let mut settings = HashMap::new();
     settings.insert("sync_enabled".to_string(), Some("false".to_string()));
     settings.insert("sync_max_queue_size".to_string(), Some("500".to_string()));
@@ -179,12 +191,15 @@ fn test_parse_sync_config() {
     settings.insert("sync_max_retries".to_string(), Some("3".to_string()));
     settings.insert("sync_retry_base_delay".to_string(), Some("2".to_string()));
     settings.insert("sync_retry_max_delay".to_string(), Some("30".to_string()));
-    settings.insert("sync_retry_use_jitter".to_string(), Some("false".to_string()));
+    settings.insert(
+        "sync_retry_use_jitter".to_string(),
+        Some("false".to_string()),
+    );
     settings.insert("sync_retention_days".to_string(), Some("3".to_string()));
     settings.insert("sync_background".to_string(), Some("false".to_string()));
 
     let sync_config = parse_sync_config(&settings);
-    
+
     assert!(!sync_config.enabled);
     assert_eq!(sync_config.max_queue_size, 500);
     assert_eq!(sync_config.sync_interval_seconds, 60);
@@ -199,17 +214,17 @@ fn test_parse_sync_config() {
 #[test]
 fn test_parse_sync_config_partial() {
     use std::collections::HashMap;
-    
+
     let mut settings = HashMap::new();
     settings.insert("sync_enabled".to_string(), Some("false".to_string()));
     settings.insert("sync_max_queue_size".to_string(), Some("200".to_string()));
 
     let sync_config = parse_sync_config(&settings);
-    
+
     // Overridden settings
     assert!(!sync_config.enabled);
     assert_eq!(sync_config.max_queue_size, 200);
-    
+
     // Default settings should remain
     assert_eq!(sync_config.sync_interval_seconds, 300);
     assert_eq!(sync_config.max_retry_attempts, 5);
@@ -223,14 +238,17 @@ fn test_parse_sync_config_partial() {
 #[test]
 fn test_parse_sync_config_invalid() {
     use std::collections::HashMap;
-    
+
     let mut settings = HashMap::new();
     settings.insert("sync_enabled".to_string(), Some("invalid_bool".to_string()));
-    settings.insert("sync_max_queue_size".to_string(), Some("not_a_number".to_string()));
+    settings.insert(
+        "sync_max_queue_size".to_string(),
+        Some("not_a_number".to_string()),
+    );
     settings.insert("sync_interval".to_string(), Some("-5".to_string()));
 
     let sync_config = parse_sync_config(&settings);
-    
+
     // Invalid settings should fall back to defaults
     assert!(sync_config.enabled);
     assert_eq!(sync_config.max_queue_size, 1000);

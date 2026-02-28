@@ -2,10 +2,10 @@ use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use std::process;
 
+use chronova_cli::api::ApiClient;
 use chronova_cli::cli::Cli;
 use chronova_cli::config::Config;
 use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
-use chronova_cli::api::ApiClient;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -22,16 +22,18 @@ async fn main() -> Result<()> {
     // Handle --today flag (fetch and display today's coding activity)
     if cli.today {
         // Check if JSON output is requested - if so, disable stdout logging to avoid corrupting JSON
-        let json_output = cli.output.as_ref().is_some_and(|format| {
-            format == "json" || format == "raw-json"
-        });
+        let json_output = cli
+            .output
+            .as_ref()
+            .is_some_and(|format| format == "json" || format == "raw-json");
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to setup logging: {}", e);
+                    process::exit(1);
+                })
         } else {
             chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
@@ -65,16 +67,18 @@ async fn main() -> Result<()> {
     // Handle offline count operations
     if cli.offline_count {
         // Check if JSON output is requested - if so, disable stdout logging to avoid corrupting JSON
-        let json_output = cli.output.as_ref().is_some_and(|format| {
-            format == "json" || format == "raw-json"
-        });
+        let json_output = cli
+            .output
+            .as_ref()
+            .is_some_and(|format| format == "json" || format == "raw-json");
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to setup logging: {}", e);
+                    process::exit(1);
+                })
         } else {
             chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
@@ -141,16 +145,18 @@ async fn main() -> Result<()> {
     // Handle extra heartbeats from STDIN
     if cli.extra_heartbeats {
         // Check if JSON output is requested - if so, disable stdout logging to avoid corrupting JSON
-        let json_output = cli.output.as_ref().is_some_and(|format| {
-            format == "json" || format == "raw-json"
-        });
+        let json_output = cli
+            .output
+            .as_ref()
+            .is_some_and(|format| format == "json" || format == "raw-json");
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to setup logging: {}", e);
+                    process::exit(1);
+                })
         } else {
             chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
@@ -188,16 +194,19 @@ async fn main() -> Result<()> {
     }
 
     // Check if JSON output is requested - if so, disable stdout logging to avoid corrupting JSON
-    let json_output = cli.output.as_ref().is_some_and(|format| {
-        format == "json" || format == "raw-json"
-    });
+    let json_output = cli
+        .output
+        .as_ref()
+        .is_some_and(|format| format == "json" || format == "raw-json");
 
     // Setup logging with appropriate output format handling
     let _guard = if json_output {
-        chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
-            eprintln!("Failed to setup logging: {}", e);
-            process::exit(1);
-        })
+        chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(
+            |e| {
+                eprintln!("Failed to setup logging: {}", e);
+                process::exit(1);
+            },
+        )
     } else {
         chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
             eprintln!("Failed to setup logging: {}", e);
@@ -214,16 +223,18 @@ async fn main() -> Result<()> {
     // Handle sync offline activity
     if let Some(count) = cli.sync_offline_activity {
         // Check if JSON output is requested - if so, disable stdout logging to avoid corrupting JSON
-        let json_output = cli.output.as_ref().is_some_and(|format| {
-            format == "json" || format == "raw-json"
-        });
+        let json_output = cli
+            .output
+            .as_ref()
+            .is_some_and(|format| format == "json" || format == "raw-json");
 
         // Setup logging with appropriate output format handling
         let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
+            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
+                .unwrap_or_else(|e| {
+                    eprintln!("Failed to setup logging: {}", e);
+                    process::exit(1);
+                })
         } else {
             chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
                 eprintln!("Failed to setup logging: {}", e);
@@ -283,7 +294,9 @@ async fn main() -> Result<()> {
 
 async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::Error> {
     let api_key = config.api_key.as_ref().ok_or_else(|| {
-        anyhow::anyhow!("API key not found in configuration. Please set api_key in your .chronova.cfg file.")
+        anyhow::anyhow!(
+            "API key not found in configuration. Please set api_key in your .chronova.cfg file."
+        )
     })?;
 
     let base_url = config.get_api_url();
@@ -309,13 +322,17 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
             }
             "text" | _ => {
                 // Default text output
-                let output = chronova_cli::api::format_today_output(&statusbar_data, cli.today_hide_categories);
+                let output = chronova_cli::api::format_today_output(
+                    &statusbar_data,
+                    cli.today_hide_categories,
+                );
                 println!("{}", output);
             }
         }
     } else {
         // Default text output when no --output flag is provided
-        let output = chronova_cli::api::format_today_output(&statusbar_data, cli.today_hide_categories);
+        let output =
+            chronova_cli::api::format_today_output(&statusbar_data, cli.today_hide_categories);
         println!("{}", output);
     }
 
@@ -335,13 +352,17 @@ async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
         // Load existing config if it exists
         if config_path.exists() {
             ini.load(&config_path).map_err(|e| {
-                anyhow::anyhow!("Failed to load config from {}: {}", config_path.display(), e)
+                anyhow::anyhow!(
+                    "Failed to load config from {}: {}",
+                    config_path.display(),
+                    e
+                )
             })?;
         }
 
         // Get the value from the specified section
         let value = ini.get(section, key);
-        
+
         // Output the value (or empty string if not found)
         println!("{}", value.unwrap_or_default());
         return Ok(());
@@ -350,7 +371,9 @@ async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
     // Handle config write
     if let Some(args) = &cli.config_write {
         if args.len() != 2 {
-            return Err(anyhow::anyhow!("--config-write requires exactly 2 arguments: key and value"));
+            return Err(anyhow::anyhow!(
+                "--config-write requires exactly 2 arguments: key and value"
+            ));
         }
 
         let key = &args[0];
@@ -362,7 +385,11 @@ async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
         // Load existing config if it exists
         if config_path.exists() {
             ini.load(&config_path).map_err(|e| {
-                anyhow::anyhow!("Failed to load config from {}: {}", config_path.display(), e)
+                anyhow::anyhow!(
+                    "Failed to load config from {}: {}",
+                    config_path.display(),
+                    e
+                )
             })?;
         }
 
@@ -381,7 +408,9 @@ async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
 }
 
 /// Process extra heartbeats from STDIN as a JSON array
-async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result<(), anyhow::Error> {
+async fn process_extra_heartbeats(
+    heartbeat_manager: HeartbeatManager,
+) -> Result<(), anyhow::Error> {
     use std::io::{self, Read};
     use uuid::Uuid;
 
@@ -390,12 +419,14 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
     io::stdin().read_to_string(&mut input)?;
 
     // Debug: Log the raw input to understand the JSON format
-    tracing::debug!("Raw extra heartbeats input (first 500 chars): {}",
-                   if input.len() > 500 {
-                       &input[..500]
-                   } else {
-                       &input
-                   });
+    tracing::debug!(
+        "Raw extra heartbeats input (first 500 chars): {}",
+        if input.len() > 500 {
+            &input[..500]
+        } else {
+            &input
+        }
+    );
 
     // Try to parse as JSON value first to inspect structure
     match serde_json::from_str::<serde_json::Value>(&input) {
@@ -419,7 +450,8 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
 
     // Parse the JSON array of heartbeats, but handle missing id field
     // External heartbeats (from WakaTime extension) may not include an id field
-    let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> = serde_json::from_str(&input);
+    let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> =
+        serde_json::from_str(&input);
 
     let heartbeats = match heartbeats_result {
         Ok(heartbeats) => heartbeats,
@@ -457,8 +489,8 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
             }
 
             // Parse as relaxed heartbeats
-            let relaxed_heartbeats: Vec<RelaxedHeartbeat> = serde_json::from_str(&input)
-                .map_err(|e| {
+            let relaxed_heartbeats: Vec<RelaxedHeartbeat> =
+                serde_json::from_str(&input).map_err(|e| {
                     tracing::error!("Failed to parse even with relaxed validation: {}", e);
                     anyhow::anyhow!("Failed to parse extra heartbeats: {}", e)
                 })?;
@@ -478,7 +510,9 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
                     lines: relaxed.lines,
                     lineno: relaxed.lineno,
                     cursorpos: relaxed.cursorpos,
-                    user_agent: Some(chronova_cli::user_agent::generate_user_agent(relaxed.user_agent.as_deref())),
+                    user_agent: Some(chronova_cli::user_agent::generate_user_agent(
+                        relaxed.user_agent.as_deref(),
+                    )),
                     category: relaxed.category,
                     machine: relaxed.machine,
                     editor: None,
@@ -492,12 +526,18 @@ async fn process_extra_heartbeats(heartbeat_manager: HeartbeatManager) -> Result
                 heartbeats.push(heartbeat);
             }
 
-            tracing::info!("Successfully parsed {} external heartbeats with generated IDs", heartbeats.len());
+            tracing::info!(
+                "Successfully parsed {} external heartbeats with generated IDs",
+                heartbeats.len()
+            );
             heartbeats
         }
     };
 
-    tracing::info!("Processing {} extra heartbeats from STDIN", heartbeats.len());
+    tracing::info!(
+        "Processing {} extra heartbeats from STDIN",
+        heartbeats.len()
+    );
 
     for heartbeat in &heartbeats {
         heartbeat_manager.add_heartbeat_to_queue(heartbeat.clone())?;
