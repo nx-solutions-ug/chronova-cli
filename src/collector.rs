@@ -1,23 +1,83 @@
+//! Data collector for project and git information detection.
+//!
+//! This module provides functionality to detect project information (name, root path)
+//! and git metadata (branch, commit, remote URL) from file paths.
+//!
+//! # Worktree Support
+//!
+//! The collector has full support for Git worktrees. When operating within a worktree:
+//!
+//! - **Project detection** (`detect_project`): Finds the nearest project root, which may be
+//!   either the worktree path or the main repository path depending on where project markers
+//!   (like `package.json`, `Cargo.toml`) are located.
+//!
+//! - **Git info detection** (`detect_git_info`): Returns the correct branch name for the
+//!   worktree, along with commit information from the worktree's HEAD.
+//!
+//! - **Main repo resolution** (`resolve_main_repo_path`): Can be used to find the main
+//!   repository path when operating within a worktree context.
+//!
+//! ## Example
+//!
+//! ```ignore
+//! use chronova_cli::collector::DataCollector;
+//!
+//! let collector = DataCollector::new();
+//!
+//! // Detect project from a file path
+//! let project = collector.detect_project("/path/to/file.rs").await;
+//!
+//! // Detect git information
+//! let git_info = collector.detect_git_info("/path/to/file.rs").await;
+//!
+//! // Check if we're in a worktree and get the main repo path
+//! if let Some(main_repo) = collector.resolve_main_repo_path(std::path::Path::new("/path/to/file.rs")) {
+//!     println!("Main repository is at: {:?}", main_repo);
+//! }
+//! ```
+
 use git2::Repository;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// Information about a detected project.
+///
+/// Contains the project name and root path. The name is extracted from
+/// project configuration files (`.wakatime-project`, `package.json`, `Cargo.toml`)
+/// or falls back to the directory name.
 #[derive(Debug, Clone)]
 pub struct ProjectInfo {
+    /// The name of the project, extracted from config files or directory name.
     pub name: String,
+    /// The root path of the project, where project markers are located.
     pub root: PathBuf,
 }
 
+/// Git repository metadata for a file path.
+///
+/// Contains information about the current branch, latest commit, and remote URL.
+/// When operating within a Git worktree, the branch name reflects the worktree's
+/// branch, not the main repository's branch.
 #[derive(Debug, Clone)]
 pub struct GitInfo {
+    /// The current branch name, if on a branch.
     pub branch: Option<String>,
+    /// The SHA-1 hash of the current commit.
     pub commit_hash: Option<String>,
+    /// The author name of the current commit.
     pub commit_author: Option<String>,
+    /// The commit message of the current commit.
     pub commit_message: Option<String>,
+    /// The URL of the 'origin' remote, with credentials stripped.
     pub repository_url: Option<String>,
 }
 
+/// Data collector for detecting project and git information.
+///
+/// The `DataCollector` provides methods to analyze file paths and extract
+/// relevant project and git metadata. It supports both regular repositories
+/// and Git worktrees.
 pub struct DataCollector;
 
 impl Default for DataCollector {
