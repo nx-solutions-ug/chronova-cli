@@ -88,6 +88,23 @@ impl HeartbeatManager {
         }
     }
 
+    /// Create a HeartbeatManager with a custom queue (useful for testing with isolated queues)
+    pub fn new_with_queue(config: Config, queue: Queue) -> Self {
+        let api_client = ApiClient::new(config.get_api_url());
+        let authenticated_api_client = config
+            .get_api_key(None)
+            .map(|key| api_client.clone().with_api_key(key));
+        let collector = DataCollector::new();
+
+        Self {
+            config,
+            api_client,
+            authenticated_api_client,
+            queue,
+            collector,
+        }
+    }
+
     pub async fn process(&self, mut cli: Cli) -> Result<(), anyhow::Error> {
         // Entity is guaranteed to be Some at this point (checked in main)
         let entity = cli.entity.take().expect("Entity should be present");
@@ -679,10 +696,10 @@ mod tests {
         manager.api_client = ApiClient::new(mock_server.uri());
         manager.authenticated_api_client = None;
 
-        // Clear any existing entries
+        // Clear any existing entries from previous test runs
         let _ = manager.queue.cleanup_old_entries(0);
 
-        // Add two heartbeats to the queue
+        // Add two heartbeats to the queue using the manager's queue directly
         let hb1 = Heartbeat {
             id: "hb-1".to_string(),
             entity: "/path/a.rs".to_string(),
@@ -731,8 +748,9 @@ mod tests {
             dependencies: Vec::new(),
         };
 
-        manager.add_heartbeat_to_queue(hb1).unwrap();
-        manager.add_heartbeat_to_queue(hb2).unwrap();
+        // Add heartbeats directly to the manager's queue
+        manager.queue.add(hb1).unwrap();
+        manager.queue.add(hb2).unwrap();
 
         // Run manual sync which uses batching logic
         let res = manager.manual_sync().await;
