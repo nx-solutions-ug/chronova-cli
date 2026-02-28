@@ -209,9 +209,8 @@ impl HeartbeatManager {
 
         loop {
             // Single blocking operation: prepare retry-eligible failed heartbeats and fetch a batch of pending
-            let queued = tokio::task::spawn_blocking({
-                let batch_size = batch_size;
-                move || -> Result<Vec<Heartbeat>, anyhow::Error> {
+            let queued =
+                tokio::task::spawn_blocking(move || -> Result<Vec<Heartbeat>, anyhow::Error> {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
 
                     // Prepare failed -> pending for retry (single DB connection)
@@ -233,9 +232,8 @@ impl HeartbeatManager {
                     // Now fetch the next batch of pending heartbeats for processing
                     q.get_pending(Some(batch_size), None)
                         .map_err(|e| anyhow::anyhow!(e))
-                }
-            })
-            .await??;
+                })
+                .await??;
 
             if queued.is_empty() {
                 break;
@@ -481,6 +479,7 @@ impl HeartbeatManager {
     }
 
     /// Update failed heartbeats with retry_count < 3 to pending status for retry
+    #[allow(dead_code)]
     async fn prepare_retry_eligible_failures(&self) -> Result<(), anyhow::Error> {
         // Run the prepare pass inside a single blocking task so we open the DB once
         let retry_count: usize = tokio::task::spawn_blocking(|| -> Result<usize, anyhow::Error> {
@@ -517,6 +516,7 @@ impl HeartbeatManager {
 }
 
 /// Extension trait for HeartbeatManager to add offline sync capabilities
+#[allow(async_fn_in_trait)]
 pub trait HeartbeatManagerExt {
     /// Process heartbeats using offline-first strategy
     async fn process_offline_first(&self) -> Result<(), anyhow::Error>;
@@ -550,7 +550,7 @@ impl HeartbeatManagerExt for HeartbeatManager {
 
         // Get initial stats before sync
         let initial_stats = self.queue.get_sync_stats()?;
-        let initial_total = initial_stats.total;
+        let _initial_total = initial_stats.total;
 
         // Process the queue and obtain counts
         let (synced_count, failed_count) = self.process_queue().await?;
