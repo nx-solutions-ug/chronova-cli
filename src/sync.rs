@@ -698,8 +698,10 @@ impl SyncManager for ChronovaSyncManager {
         use crate::queue::Queue;
 
         let start = self.log_sync_start("sync_pending", None);
-        let mut sync_result = SyncResult::default();
-        sync_result.start_time = Some(SystemTime::now());
+        let mut sync_result = SyncResult {
+            start_time: Some(SystemTime::now()),
+            ..Default::default()
+        };
 
         // Choose a reasonable batch size for each network call (configurable)
         let batch_size = std::cmp::min(self.config.batch_size, self.config.max_queue_size);
@@ -707,7 +709,6 @@ impl SyncManager for ChronovaSyncManager {
         loop {
             // Fetch a batch of pending heartbeats from the on-disk queue inside a blocking thread
             let pending_res = tokio::task::spawn_blocking({
-                let batch_size = batch_size;
                 move || -> Result<Vec<Heartbeat>, SyncError> {
                     let queue = Queue::new().map_err(|e| SyncError::Database(format!("{}", e)))?;
                     let hbs = queue
@@ -835,12 +836,13 @@ impl SyncManager for ChronovaSyncManager {
         use crate::queue::Queue;
 
         let start = self.log_sync_start("sync_batch", Some(batch_size));
-        let mut result = SyncResult::default();
-        result.start_time = Some(SystemTime::now());
+        let mut result = SyncResult {
+            start_time: Some(SystemTime::now()),
+            ..Default::default()
+        };
 
         // Fetch up to batch_size pending heartbeats
         let pending = tokio::task::spawn_blocking({
-            let batch_size = batch_size;
             move || -> Result<Vec<Heartbeat>, SyncError> {
                 let queue = Queue::new().map_err(|e| SyncError::Database(format!("{}", e)))?;
                 let hbs = queue

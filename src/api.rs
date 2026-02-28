@@ -191,7 +191,7 @@ impl ApiClient {
             Ok(response) => {
                 // Handle error response from Chronova endpoint
                 let status = response.status();
-                let error_body = response.text().await.unwrap_or_default();
+                let _error_body = response.text().await.unwrap_or_default();
 
                 match status.as_u16() {
                     401 => return Err(ApiError::Auth("Invalid API key".to_string())),
@@ -598,6 +598,7 @@ impl AuthenticatedApiClient {
         ))
     }
 
+    #[allow(dead_code)]
     async fn handle_response(&self, response: Response) -> Result<Response, ApiError> {
         let status = response.status();
 
@@ -670,6 +671,7 @@ pub fn format_today_output(stats: &StatusBarResponse, hide_categories: bool) -> 
     }
 }
 
+#[allow(dead_code)]
 fn format_today_output_from_full(data: &StatusBarData, hide_categories: bool) -> String {
     let total_seconds = data.grand_total.total_seconds;
 

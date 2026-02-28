@@ -144,9 +144,9 @@ impl Config {
         }
 
         // Handle ~ expansion
-        if config_path.starts_with("~/") {
+        if let Some(stripped) = config_path.strip_prefix("~/") {
             if let Some(mut home) = home_dir() {
-                home.push(&config_path[2..]);
+                home.push(stripped);
                 return Ok(home);
             }
         }

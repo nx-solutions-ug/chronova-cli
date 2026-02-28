@@ -558,7 +558,7 @@ impl Queue {
         match Connection::open(db_path) {
             Ok(conn) => {
                 // Verify database integrity
-                if let Err(e) = Self::verify_database_integrity(&conn) {
+                if let Err(_e) = Self::verify_database_integrity(&conn) {
                     // Close the corrupted connection
                     drop(conn);
 
@@ -567,7 +567,7 @@ impl Queue {
                 }
                 Ok(conn)
             }
-            Err(e) => Self::attempt_database_recovery(db_path),
+            Err(_e) => Self::attempt_database_recovery(db_path),
         }
     }
 
