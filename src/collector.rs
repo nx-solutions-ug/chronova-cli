@@ -1,7 +1,7 @@
+use git2::Repository;
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use lazy_static::lazy_static;
-use git2::Repository;
 
 #[derive(Debug, Clone)]
 pub struct ProjectInfo {
@@ -51,7 +51,17 @@ impl DataCollector {
 
         // 3) Heuristic: walk up ancestors looking for common source layout (e.g., 'src' directory) or package files.
         // Additionally, avoid naming projects after common code directories like 'src', 'app', 'components', etc.
-        let ignored_dirs = ["src", "app", "components", "lib", "packages", "pkg", "dist", "build", "tests"];
+        let ignored_dirs = [
+            "src",
+            "app",
+            "components",
+            "lib",
+            "packages",
+            "pkg",
+            "dist",
+            "build",
+            "tests",
+        ];
         let mut current = path.parent();
         while let Some(dir) = current {
             // Prefer explicit markers if present on this ancestor
@@ -92,7 +102,10 @@ impl DataCollector {
                     if let Some(grand) = root.parent() {
                         let grand_root = grand.to_path_buf();
                         let name = self.extract_project_name(&grand_root);
-                        return Some(ProjectInfo { name, root: grand_root });
+                        return Some(ProjectInfo {
+                            name,
+                            root: grand_root,
+                        });
                     }
                 }
             }
@@ -116,7 +129,9 @@ impl DataCollector {
 
         // Try to get HEAD and the commit it points to
         let head = repo.head().ok();
-        let branch = head.as_ref().and_then(|h| h.shorthand().map(|s| s.to_string()));
+        let branch = head
+            .as_ref()
+            .and_then(|h| h.shorthand().map(|s| s.to_string()));
 
         let commit = head.and_then(|h| h.peel_to_commit().ok());
         let commit_hash = commit.as_ref().map(|c| c.id().to_string());
@@ -127,17 +142,15 @@ impl DataCollector {
             .as_ref()
             .and_then(|c| c.message().map(|s| s.to_string()));
 
-        let repository_url = repo
-            .find_remote("origin")
-            .ok()
-            .and_then(|r| r.url().map(|s| {
+        let repository_url = repo.find_remote("origin").ok().and_then(|r| {
+            r.url().map(|s| {
                 // sanitize remote URL to remove sensitive userinfo (user:pass or token before '@')
                 let raw = s.to_string();
 
                 // If scheme exists (e.g., "https://"), strip userinfo from the authority portion only
                 if let Some(scheme_sep) = raw.find("://") {
                     let (scheme, rest) = raw.split_at(scheme_sep + 3); // include "://"
-                    // isolate authority (up to first '/') and path
+                                                                       // isolate authority (up to first '/') and path
                     let auth_end = rest.find('/').unwrap_or(rest.len());
                     let (authority, path) = rest.split_at(auth_end);
                     if let Some(at_pos) = authority.find('@') {
@@ -154,7 +167,8 @@ impl DataCollector {
                 }
 
                 raw
-            }));
+            })
+        });
 
         Some(GitInfo {
             branch,
@@ -194,8 +208,7 @@ impl DataCollector {
 
         // 2) Multi-part extensions (try longest-first)
         const MULTI_PART_EXTS: &[&str] = &[
-            ".tar.gz", ".tar.bz2", ".tar.xz",
-            ".log.gz", ".log.bz2", ".log.xz",
+            ".tar.gz", ".tar.bz2", ".tar.xz", ".log.gz", ".log.bz2", ".log.xz",
         ];
 
         for ext in MULTI_PART_EXTS.iter() {
@@ -219,33 +232,34 @@ impl DataCollector {
 
     fn find_project_root(&self, path: &Path) -> Option<PathBuf> {
         let mut current = path.parent()?;
-        
+
         while current.parent().is_some() {
             // Check for common project markers
-            if current.join(".git").exists() 
+            if current.join(".git").exists()
                 || current.join(".wakatime-project").exists()
                 || current.join("package.json").exists()
                 || current.join("Cargo.toml").exists()
                 || current.join("pyproject.toml").exists()
-                || current.join("go.mod").exists() {
+                || current.join("go.mod").exists()
+            {
                 return Some(current.to_path_buf());
             }
             current = current.parent()?;
         }
-        
+
         None
     }
 
     fn find_git_root(&self, path: &Path) -> Option<PathBuf> {
         let mut current = path.parent()?;
-        
+
         while current.parent().is_some() {
             if current.join(".git").exists() {
                 return Some(current.to_path_buf());
             }
             current = current.parent()?;
         }
-        
+
         None
     }
 
@@ -254,7 +268,7 @@ impl DataCollector {
         if let Ok(content) = std::fs::read_to_string(root.join(".wakatime-project")) {
             return content.trim().to_string();
         }
-        
+
         // Try to get name from package.json
         if let Ok(content) = std::fs::read_to_string(root.join("package.json")) {
             if let Ok(package) = serde_json::from_str::<serde_json::Value>(&content) {
@@ -263,7 +277,7 @@ impl DataCollector {
                 }
             }
         }
-        
+
         // Try to get name from Cargo.toml
         if let Ok(content) = std::fs::read_to_string(root.join("Cargo.toml")) {
             for line in content.lines() {
@@ -274,7 +288,7 @@ impl DataCollector {
                 }
             }
         }
-        
+
         // Fall back to directory name
         root.file_name()
             .and_then(|n| n.to_str())
@@ -282,6 +296,88 @@ impl DataCollector {
             .to_string()
     }
 
+    /// Resolves the main repository path when operating within a git worktree.
+    ///
+    /// When called from within a worktree, this method parses the `.git` file
+    /// to find the path to the main repository. The `.git` file in a worktree
+    /// contains a line like: `gitdir: /path/to/main/.git/worktrees/<name>`
+    ///
+    /// # Arguments
+    /// * `path` - A path within the repository (can be the worktree root or any file inside)
+    ///
+    /// # Returns
+    /// * `Some(PathBuf)` - The path to the main repository if we're in a worktree
+    /// * `None` - If we're not in a worktree, or if resolution fails
+    pub fn resolve_main_repo_path(&self, path: &Path) -> Option<PathBuf> {
+        // Discover the repository from the given path
+        let repo = Repository::discover(path).ok()?;
+
+        // Check if this is a worktree
+        if !repo.is_worktree() {
+            return None;
+        }
+
+        // For worktrees, the .git file is at the worktree root
+        // Get the worktree's working directory
+        let worktree_root = repo.workdir()?;
+
+        // Read the .git file which contains the gitdir reference
+        let git_file_path = worktree_root.join(".git");
+        let git_file_content = std::fs::read_to_string(&git_file_path).ok()?;
+
+        // Parse the gitdir line: "gitdir: /path/to/main/.git/worktrees/<name>"
+        let gitdir_line = git_file_content
+            .lines()
+            .find(|line| line.starts_with("gitdir:"))?;
+
+        let gitdir_path = gitdir_line.strip_prefix("gitdir:").map(|s| s.trim())?;
+
+        // The gitdir points to /path/to/main/.git/worktrees/<name>
+        // We need to go up 2 directories to get to the main repo's .git directory
+        // Then go up one more to get the main repo root
+        let gitdir = PathBuf::from(gitdir_path);
+
+        // Go up from worktrees/<name> to .git, then to main repo root
+        let main_git_dir = gitdir
+            .parent()? // Remove <name> -> worktrees/
+            .parent()?; // Remove worktrees/ -> .git/
+
+        // The main repo root is the parent of .git
+        let main_repo_root = main_git_dir.parent()?;
+
+        Some(main_repo_root.to_path_buf())
+    }
+
+    /// Gets the project root path, respecting worktree boundaries.
+    ///
+    /// When inside a git worktree, this returns the main repository's root path
+    /// rather than the worktree's path. This ensures that project detection
+    /// and naming work correctly across worktrees.
+    ///
+    /// # Arguments
+    /// * `path` - A path within the repository
+    ///
+    /// # Returns
+    /// The path to the project root (main repo if in worktree, otherwise current repo)
+    #[allow(dead_code)] // Will be used in future tasks for project detection
+    fn get_project_root_respecting_worktree(&self, path: &Path) -> PathBuf {
+        // First, try to resolve the main repo path if we're in a worktree
+        if let Some(main_repo_path) = self.resolve_main_repo_path(path) {
+            return main_repo_path;
+        }
+
+        // Not a worktree, use normal repository discovery
+        if let Ok(repo) = Repository::discover(path) {
+            if let Some(workdir) = repo.workdir() {
+                return workdir.to_path_buf();
+            }
+        }
+
+        // Fallback: return the parent directory of the path
+        path.parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| path.to_path_buf())
+    }
 }
 
 lazy_static! {
@@ -405,13 +501,13 @@ lazy_static! {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_language_detection() {
         let collector = DataCollector::new();
-        
+
         assert_eq!(
             tokio_test::block_on(collector.detect_language("test.rs")),
             Some("Rust".to_string())
@@ -431,19 +527,22 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path().join("my-project");
         fs::create_dir(&project_dir).unwrap();
-        
+
         // Create a package.json file
-        fs::write(project_dir.join("package.json"), r#"{"name": "test-project"}"#).unwrap();
-        
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "test-project"}"#,
+        )
+        .unwrap();
+
         let test_file = project_dir.join("src").join("test.js");
         fs::create_dir_all(test_file.parent().unwrap()).unwrap();
         fs::write(&test_file, "// test").unwrap();
-        
+
         let collector = DataCollector::new();
-        let project_info = tokio_test::block_on(
-            collector.detect_project(test_file.to_str().unwrap())
-        ).unwrap();
-        
+        let project_info =
+            tokio_test::block_on(collector.detect_project(test_file.to_str().unwrap())).unwrap();
+
         assert_eq!(project_info.name, "test-project");
         assert_eq!(project_info.root, project_dir);
     }
@@ -457,9 +556,8 @@ mod tests {
         fs::write(&file_path, "// test").unwrap();
 
         let collector = DataCollector::new();
-        let project_info = tokio_test::block_on(
-            collector.detect_project(file_path.to_str().unwrap())
-        ).unwrap();
+        let project_info =
+            tokio_test::block_on(collector.detect_project(file_path.to_str().unwrap())).unwrap();
 
         assert_eq!(project_info.name, "chronova-revised");
         assert_eq!(project_info.root, project_dir);
@@ -469,21 +567,22 @@ mod tests {
     fn test_extract_project_name() {
         let temp_dir = TempDir::new().unwrap();
         let collector = DataCollector::new();
-        
+
         // Test .wakatime-project file
-        fs::write(temp_dir.path().join(".wakatime-project"), "my-custom-project").unwrap();
+        fs::write(
+            temp_dir.path().join(".wakatime-project"),
+            "my-custom-project",
+        )
+        .unwrap();
         assert_eq!(
             collector.extract_project_name(temp_dir.path()),
             "my-custom-project"
         );
-        
+
         // Test directory name fallback
         let named_dir = TempDir::new().unwrap();
         let dir_name = named_dir.path().file_name().unwrap().to_str().unwrap();
-        assert_eq!(
-            collector.extract_project_name(named_dir.path()),
-            dir_name
-        );
+        assert_eq!(collector.extract_project_name(named_dir.path()), dir_name);
     }
 
     #[test]
@@ -494,7 +593,10 @@ mod tests {
 
         let collector = DataCollector::new();
         let res = tokio_test::block_on(collector.detect_git_info(file_path.to_str().unwrap()));
-        assert!(res.is_none(), "detect_git_info should return None for non-git directories");
+        assert!(
+            res.is_none(),
+            "detect_git_info should return None for non-git directories"
+        );
     }
 
     #[test]
@@ -517,14 +619,20 @@ mod tests {
         let tree = repo.find_tree(tree_oid).unwrap();
 
         let sig = Signature::now("Test Author", "author@example.com").unwrap();
-        let commit_oid = repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[]).unwrap();
+        let commit_oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
 
         // Add remote origin
-        repo.remote("origin", "https://example.com/repo.git").unwrap();
+        repo.remote("origin", "https://example.com/repo.git")
+            .unwrap();
 
         let collector = DataCollector::new();
         let res = tokio_test::block_on(collector.detect_git_info(file_path.to_str().unwrap()));
-        assert!(res.is_some(), "detect_git_info should detect git repo metadata");
+        assert!(
+            res.is_some(),
+            "detect_git_info should detect git repo metadata"
+        );
 
         let info = res.unwrap();
         assert!(info.commit_hash.is_some(), "commit_hash should be present");
@@ -534,7 +642,10 @@ mod tests {
         assert!(info.commit_message.is_some());
         assert_eq!(info.commit_message.unwrap(), "initial commit".to_string());
         assert!(info.repository_url.is_some());
-        assert_eq!(info.repository_url.unwrap(), "https://example.com/repo.git".to_string());
+        assert_eq!(
+            info.repository_url.unwrap(),
+            "https://example.com/repo.git".to_string()
+        );
     }
 
     #[test]
@@ -555,32 +666,46 @@ mod tests {
         let tree = repo.find_tree(tree_oid).unwrap();
 
         let sig = Signature::now("Test Author", "author@example.com").unwrap();
-        let _commit_oid = repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[]).unwrap();
+        let _commit_oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
 
         let collector = DataCollector::new();
 
         // 1) HTTPS with user:password@ -> scheme preserved, userinfo removed
-        repo.remote("origin", "https://user:password@github.com/owner/repo.git").unwrap();
+        repo.remote("origin", "https://user:password@github.com/owner/repo.git")
+            .unwrap();
         let res = tokio_test::block_on(collector.detect_git_info(file_path.to_str().unwrap()));
         assert!(res.is_some());
         let info = res.unwrap();
-        assert_eq!(info.repository_url.unwrap(), "https://github.com/owner/repo.git".to_string());
+        assert_eq!(
+            info.repository_url.unwrap(),
+            "https://github.com/owner/repo.git".to_string()
+        );
 
         // 2) HTTPS with token@ -> remove token
         repo.remote_delete("origin").ok();
-        repo.remote("origin", "https://token123@bitbucket.org/owner/repo.git").unwrap();
+        repo.remote("origin", "https://token123@bitbucket.org/owner/repo.git")
+            .unwrap();
         let res2 = tokio_test::block_on(collector.detect_git_info(file_path.to_str().unwrap()));
         assert!(res2.is_some());
         let info2 = res2.unwrap();
-        assert_eq!(info2.repository_url.unwrap(), "https://bitbucket.org/owner/repo.git".to_string());
+        assert_eq!(
+            info2.repository_url.unwrap(),
+            "https://bitbucket.org/owner/repo.git".to_string()
+        );
 
         // 3) scp-like "git@host:owner/repo.git" -> strip leading "git@"
         repo.remote_delete("origin").ok();
-        repo.remote("origin", "git@github.com:owner/repo.git").unwrap();
+        repo.remote("origin", "git@github.com:owner/repo.git")
+            .unwrap();
         let res3 = tokio_test::block_on(collector.detect_git_info(file_path.to_str().unwrap()));
         assert!(res3.is_some());
         let info3 = res3.unwrap();
-        assert_eq!(info3.repository_url.unwrap(), "github.com:owner/repo.git".to_string());
+        assert_eq!(
+            info3.repository_url.unwrap(),
+            "github.com:owner/repo.git".to_string()
+        );
     }
 
     #[test]
@@ -595,5 +720,140 @@ mod tests {
             collector.extract_project_name(&project_dir),
             "my.project.name".to_string()
         );
+    }
+
+    #[test]
+    fn test_resolve_main_repo_path_not_worktree() {
+        use git2::{Repository, Signature};
+
+        // Create a normal git repository (not a worktree)
+        let temp_dir = TempDir::new().unwrap();
+        let repo_dir = temp_dir.path().join("main-repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+
+        // Initialize repository and make initial commit
+        let repo = Repository::init(&repo_dir).expect("init repo");
+        let file_path = repo_dir.join("README.md");
+        fs::write(&file_path, "hello").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+
+        let sig = Signature::now("Test Author", "author@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
+
+        // Test: For a normal repo, resolve_main_repo_path should return None
+        let collector = DataCollector::new();
+        let result = collector.resolve_main_repo_path(&repo_dir);
+
+        assert!(
+            result.is_none(),
+            "resolve_main_repo_path should return None for a non-worktree repository"
+        );
+    }
+
+    #[test]
+    fn test_resolve_main_repo_path_with_worktree() {
+        use git2::{Repository, Signature};
+
+        // Create a main repository
+        let temp_dir = TempDir::new().unwrap();
+        let main_repo_dir = temp_dir.path().join("main-repo");
+        fs::create_dir_all(&main_repo_dir).unwrap();
+
+        // Initialize main repository
+        let main_repo = Repository::init(&main_repo_dir).expect("init main repo");
+        let file_path = main_repo_dir.join("README.md");
+        fs::write(&file_path, "hello").unwrap();
+
+        let mut index = main_repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = main_repo.find_tree(tree_oid).unwrap();
+
+        let sig = Signature::now("Test Author", "author@example.com").unwrap();
+        main_repo
+            .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
+
+        // Create a worktree
+        let worktree_dir = temp_dir.path().join("worktree-repo");
+        let worktree = main_repo
+            .worktree("test-worktree", &worktree_dir, None)
+            .expect("create worktree");
+
+        // Test: For a worktree, resolve_main_repo_path should return the main repo path
+        let collector = DataCollector::new();
+        let result = collector.resolve_main_repo_path(&worktree_dir);
+
+        assert!(
+            result.is_some(),
+            "resolve_main_repo_path should return Some for a worktree"
+        );
+
+        let resolved_path = result.unwrap();
+        assert!(
+            resolved_path.ends_with("main-repo"),
+            "Resolved path should end with 'main-repo', got: {:?}",
+            resolved_path
+        );
+
+        // Cleanup
+        worktree.prune(None).ok();
+    }
+
+    #[test]
+    fn test_get_project_root_respecting_worktree() {
+        use git2::{Repository, Signature};
+
+        // Create a main repository
+        let temp_dir = TempDir::new().unwrap();
+        let main_repo_dir = temp_dir.path().join("main-repo");
+        fs::create_dir_all(&main_repo_dir).unwrap();
+
+        // Initialize main repository
+        let main_repo = Repository::init(&main_repo_dir).expect("init main repo");
+        let file_path = main_repo_dir.join("README.md");
+        fs::write(&file_path, "hello").unwrap();
+
+        let mut index = main_repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = main_repo.find_tree(tree_oid).unwrap();
+
+        let sig = Signature::now("Test Author", "author@example.com").unwrap();
+        main_repo
+            .commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
+
+        // Create a worktree
+        let worktree_dir = temp_dir.path().join("worktree-repo");
+        let worktree = main_repo
+            .worktree("test-worktree", &worktree_dir, None)
+            .expect("create worktree");
+
+        // Test: get_project_root_respecting_worktree should return main repo path for worktree
+        let collector = DataCollector::new();
+        let result = collector.get_project_root_respecting_worktree(&worktree_dir);
+
+        assert!(
+            result.ends_with("main-repo"),
+            "Project root should be main-repo, got: {:?}",
+            result
+        );
+
+        // Test: For a normal repo, it should return that repo's workdir
+        let normal_result = collector.get_project_root_respecting_worktree(&main_repo_dir);
+        assert!(
+            normal_result.ends_with("main-repo"),
+            "Normal repo should return its own workdir, got: {:?}",
+            normal_result
+        );
+
+        // Cleanup
+        worktree.prune(None).ok();
     }
 }
