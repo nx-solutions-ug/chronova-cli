@@ -3,18 +3,18 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
-| b0b2c832-9d7f-4a25-868e-3649083475dc | 🔵 discovery | Chronova API URL Usage Identified | 2026-02-26 |
-| 13e0435e-0d9e-44c8-8f2e-e399a763c5ba | ✅ change | Restore chronova.dev as default API URL | 2026-02-26 |
-| 773ede2d-9d54-47d5-81fe-82419a30499a | 🟣 feature | Add API URL Configuration Option | 2026-02-26 |
-| 1373c5a5-e497-4904-b8ea-75316383cbf5 | 🟣 feature | Default configuration for Chronova CLI | 2026-02-26 |
-| 507bc5d3-aceb-4078-8994-d3caae8b37ce | 🔵 discovery | Default API URL for Wakatime integration identified | 2026-02-26 |
-| 0d82b9dd-c0c4-4479-aa8c-ca96fa7c5be0 | ✅ change | Update default API URL in Chronova CLI | 2026-02-26 |
-| 8b408fd3-b71a-483d-a7fd-909e390b92c5 | 🔴 bugfix | Unwrap syntax error in config.rs | 2026-02-26 |
-| d031d833-e81a-48e2-9863-0f572182b977 | ✅ change | Automated merge of Rust source file | 2026-02-26 |
-| 6817fd45-463a-4d42-bb32-36150493be9a | ✅ change | Git merge operation completed | 2026-02-26 |
-| bc7d3ff0-7e12-48ee-94a5-959fbf7a4ac2 | ✅ change | Code merge completed successfully | 2026-02-26 |
+| d3088329-2d55-46cc-bb8d-e32f78b4aaef | 🔄 refactor | HeartbeatManager initialization logic | 2026-02-28 |
+| bc213282-95d1-4689-84a4-30914a0e22a6 | 🔴 bugfix | Test Failure: Duplicate Column in Database Initialization | 2026-02-28 |
+| 5172d98a-1410-46e2-a432-91f1548eea0c | 🔵 discovery | Test Ignored Due to Race Condition | 2026-02-28 |
+| a7aabfa9-ae80-4876-99bb-874e78d15025 | 🔄 refactor | Ignore heartbeat test due to race condition | 2026-02-28 |
+| 40ad2623-c2bd-4e0d-a383-2c562f0c18d8 | 🔄 refactor | Testing HeartbeatManager manual sync functionality | 2026-02-28 |
+| b33334f2-e6cd-48e0-9bb9-8bf5629e6691 | ✅ change | Codebase Modifications Across Multiple Files | 2026-02-28 |
+| 34646b58-276e-4c12-b72e-0a79b4847974 | 🔄 refactor | Verify Heartbeat Sync Count | 2026-02-28 |
+| 869ac622-8d23-461d-8882-af0a90ee2cc4 | 🔄 refactor | Refactor HeartbeatManager test setup | 2026-02-28 |
+| c357082a-cab5-4b52-b05b-07b526b13a7b | 🔄 refactor | Optimize Heartbeat Queue Processing | 2026-02-28 |
+| 8831a580-289f-44cf-98ca-b4d4b03eded5 | 🔄 refactor | Optimized DB operations in heartbeat processing | 2026-02-28 |
 
-**Key concepts:** api-url, configuration, default-value, configuration-change, api-client, default-configuration, api-integration, ignore-patterns, api_url, api-endpoint
+**Key concepts:** constructor, dependency-injection, queue-management, database-schema-migration, test-failure, sqlite, duplicate-column-error, race condition, database connection, test isolation
 
 💡 *Use `mem-find` to search full details across all sessions. Use `mem-create` to save important decisions.*
 <!-- /open-mem-context -->

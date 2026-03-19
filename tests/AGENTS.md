@@ -3,9 +3,18 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
-| 877ca10e-97e7-4ab6-a467-d32f1c60a529 | 🔄 refactor | Clean up unused code and address deprecation warnings | 2026-02-28 |
+| 70082080-ffa7-43a4-b1d8-2b18fcb9f8cf | 🔄 refactor | Ignore test due to race condition | 2026-02-28 |
+| ad3575a0-b2b2-4787-8e6b-b657fa114275 | 🔄 refactor | Test for retry mechanism integration | 2026-02-28 |
+| 4be7038e-f97e-4069-a5fb-6787e2921afa | 🔄 refactor | Ignore test due to race condition | 2026-02-28 |
+| 59a13d86-90cd-402a-9189-8cb3cde400c6 | 🔄 refactor | Refactor queue initialization for test isolation | 2026-02-28 |
+| 1e8d033a-23a2-4435-a366-d4cbc11e8862 | 🔄 refactor | Isolate test queue for retry mechanism | 2026-02-28 |
+| 6f9745d9-d256-4c7e-b347-8d042f97a72a | 🔄 refactor | Remove redundant queue cleanup in test | 2026-02-28 |
+| c3d27ffa-832f-4f21-9b78-da4432166373 | 🔄 refactor | Isolate test queue with temporary directory | 2026-02-28 |
+| ec1703cc-d570-464a-8714-080253322ef9 | 🟣 feature | Test retry mechanism for failed heartbeats | 2026-02-28 |
+| fe4bcb34-f2b6-427c-885c-4698ad8acda6 | 🟣 feature | Implement Permanent Failure for Retries | 2026-02-28 |
+| 40a406c7-eca9-4009-8703-e5112d8ccb3e | 🟣 feature | Implement heartbeat retry mechanism in sync queue | 2026-02-28 |
 
-**Key concepts:** code-quality, dead-code-elimination, deprecation-warnings, rust
+**Key concepts:** race condition, integration test, testing, retry-mechanism, integration-test, isolated-database, test isolation, shared resource, concurrent testing, refactoring
 
 💡 *Use `mem-find` to search full details across all sessions. Use `mem-create` to save important decisions.*
 <!-- /open-mem-context -->

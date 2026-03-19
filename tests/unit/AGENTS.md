@@ -3,9 +3,15 @@
 
 | ID | Type | Title | Date |
 |----|------|-------|------|
+| b33334f2-e6cd-48e0-9bb9-8bf5629e6691 | ✅ change | Codebase Modifications Across Multiple Files | 2026-02-28 |
+| 9a89a35a-0d42-42ef-8eb1-79f132d3ee58 | ✅ change | Changes to AGENTS.md and related files | 2026-02-28 |
+| cf8e4d87-bdf4-452f-a609-f9d1f8b25e55 | ✅ change | Uncommitted changes detected in Git repository | 2026-02-28 |
+| 0175ad9d-117a-4803-ace9-17ad611c27f9 | ✅ change | File modifications and size changes | 2026-02-28 |
+| 33e3a651-5df3-4a49-9a65-106d58823e95 | ✅ change | Code changes staged for commit on main branch | 2026-02-28 |
+| a9712e88-009a-4f78-913c-4107a8a0ad51 | ✅ change | Uncommitted changes detected in Git repository | 2026-02-28 |
 | eed4467f-018d-47ab-8eba-8e641797bcef | 🔄 refactor | Significant changes to core and test modules | 2026-02-28 |
 
-**Key concepts:** refactor, code-modification, testing-infrastructure
+**Key concepts:** what_changed, database_size_increase, what-changed, code-documentation, memory-management, git, version-control, uncommitted-changes, staging-area, unversioned-files
 
 💡 *Use `mem-find` to search full details across all sessions. Use `mem-create` to save important decisions.*
 <!-- /open-mem-context -->
