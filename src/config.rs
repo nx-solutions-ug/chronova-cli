@@ -25,6 +25,11 @@ pub struct Config {
     pub hide_file_names: bool,
     pub hide_project_names: bool,
     pub hide_branch_names: bool,
+    pub hide_commit_hash: bool,
+    pub hide_commit_author: bool,
+    pub hide_commit_message: bool,
+    pub hide_repository_url: bool,
+    pub disable_git_info: bool,
     pub hide_project_folder: bool,
     pub exclude_unknown_project: bool,
     pub include_patterns: Vec<String>,
@@ -78,6 +83,26 @@ impl Config {
                 .unwrap_or(false),
             hide_branch_names: settings
                 .get("hide_branch_names")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_commit_hash: settings
+                .get("hide_commit_hash")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_commit_author: settings
+                .get("hide_commit_author")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_commit_message: settings
+                .get("hide_commit_message")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_repository_url: settings
+                .get("hide_repository_url")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            disable_git_info: settings
+                .get("disable_git_info")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             hide_project_folder: settings
@@ -279,6 +304,11 @@ impl Default for Config {
             hide_file_names: false,
             hide_project_names: false,
             hide_branch_names: false,
+            hide_commit_hash: false,
+            hide_commit_author: false,
+            hide_commit_message: false,
+            hide_repository_url: false,
+            disable_git_info: false,
             hide_project_folder: false,
             exclude_unknown_project: false,
             disable_offline: false,
