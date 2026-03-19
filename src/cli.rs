@@ -94,6 +94,26 @@ pub struct Cli {
     #[arg(long)]
     pub hide_branch_names: Option<String>,
 
+    /// Disable sending all git information (commit_hash, commit_author, commit_message, repository_url).
+    #[arg(long)]
+    pub disable_git_info: bool,
+
+    /// Obfuscate commit hash. Will not send revision control commit hash to api.
+    #[arg(long)]
+    pub hide_commit_hash: bool,
+
+    /// Obfuscate commit author. Will not send revision control commit author to api.
+    #[arg(long)]
+    pub hide_commit_author: bool,
+
+    /// Obfuscate commit message. Will not send revision control commit message to api.
+    #[arg(long)]
+    pub hide_commit_message: bool,
+
+    /// Obfuscate repository URL. Will not send revision control remote url to api.
+    #[arg(long)]
+    pub hide_repository_url: bool,
+
     /// Obfuscate filenames. Will not send file names to api.
     #[arg(long)]
     pub hide_file_names: Option<String>,
