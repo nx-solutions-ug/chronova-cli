@@ -185,10 +185,34 @@ impl HeartbeatManager {
                 .or_else(|| Some(gethostname::gethostname().to_string_lossy().into_owned())),
             editor: None,
             operating_system: None,
-            commit_hash: git_info.as_ref().and_then(|g| g.commit_hash.clone()),
-            commit_author: git_info.as_ref().and_then(|g| g.commit_author.clone()),
-            commit_message: git_info.as_ref().and_then(|g| g.commit_message.clone()),
-            repository_url: git_info.as_ref().and_then(|g| g.repository_url.clone()),
+            commit_hash: if self.config.disable_git_info
+                || self.config.hide_commit_hash
+            {
+                None
+            } else {
+                git_info.as_ref().and_then(|g| g.commit_hash.clone())
+            },
+            commit_author: if self.config.disable_git_info
+                || self.config.hide_commit_author
+            {
+                None
+            } else {
+                git_info.as_ref().and_then(|g| g.commit_author.clone())
+            },
+            commit_message: if self.config.disable_git_info
+                || self.config.hide_commit_message
+            {
+                None
+            } else {
+                git_info.as_ref().and_then(|g| g.commit_message.clone())
+            },
+            repository_url: if self.config.disable_git_info
+                || self.config.hide_repository_url
+            {
+                None
+            } else {
+                git_info.as_ref().and_then(|g| g.repository_url.clone())
+            },
             dependencies: Vec::new(),
         })
     }
