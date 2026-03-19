@@ -97,6 +97,22 @@ async fn main() -> Result<()> {
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
+        // Merge git privacy flags from CLI
+        if cli.disable_git_info {
+            config.disable_git_info = true;
+        }
+        if cli.hide_commit_hash {
+            config.hide_commit_hash = true;
+        }
+        if cli.hide_commit_author {
+            config.hide_commit_author = true;
+        }
+        if cli.hide_commit_message {
+            config.hide_commit_message = true;
+        }
+        if cli.hide_repository_url {
+            config.hide_repository_url = true;
+        }
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Get queue statistics
@@ -174,6 +190,22 @@ async fn main() -> Result<()> {
         let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
+        }
+        // Merge git privacy flags from CLI
+        if cli.disable_git_info {
+            config.disable_git_info = true;
+        }
+        if cli.hide_commit_hash {
+            config.hide_commit_hash = true;
+        }
+        if cli.hide_commit_author {
+            config.hide_commit_author = true;
+        }
+        if cli.hide_commit_message {
+            config.hide_commit_message = true;
+        }
+        if cli.hide_repository_url {
+            config.hide_repository_url = true;
         }
         let heartbeat_manager = HeartbeatManager::new(config);
 
@@ -253,6 +285,22 @@ async fn main() -> Result<()> {
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
+        // Merge git privacy flags from CLI
+        if cli.disable_git_info {
+            config.disable_git_info = true;
+        }
+        if cli.hide_commit_hash {
+            config.hide_commit_hash = true;
+        }
+        if cli.hide_commit_author {
+            config.hide_commit_author = true;
+        }
+        if cli.hide_commit_message {
+            config.hide_commit_message = true;
+        }
+        if cli.hide_repository_url {
+            config.hide_repository_url = true;
+        }
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Perform manual sync
@@ -280,6 +328,22 @@ async fn main() -> Result<()> {
     let mut config = config;
     if let Some(api_url) = &cli.api_url {
         config.api_url = Some(api_url.clone());
+    }
+    // Merge git privacy flags from CLI
+    if cli.disable_git_info {
+        config.disable_git_info = true;
+    }
+    if cli.hide_commit_hash {
+        config.hide_commit_hash = true;
+    }
+    if cli.hide_commit_author {
+        config.hide_commit_author = true;
+    }
+    if cli.hide_commit_message {
+        config.hide_commit_message = true;
+    }
+    if cli.hide_repository_url {
+        config.hide_repository_url = true;
     }
     let heartbeat_manager = HeartbeatManager::new(config);
 
