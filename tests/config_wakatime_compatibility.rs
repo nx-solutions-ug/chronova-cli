@@ -22,6 +22,12 @@ pub struct Config {
     pub include_only_with_project_file: bool,
     pub ignore_patterns: Vec<String>,
     pub include_patterns: Vec<String>,
+    // Git privacy controls
+    pub disable_git_info: bool,
+    pub hide_commit_hash: bool,
+    pub hide_commit_author: bool,
+    pub hide_commit_message: bool,
+    pub hide_repository_url: bool,
 }
 
 impl Config {
@@ -105,7 +111,59 @@ impl Config {
                         .collect()
                 })
                 .unwrap_or_default(),
+            // Git privacy controls
+            disable_git_info: settings
+                .get("disable_git_info")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_commit_hash: settings
+                .get("hide_commit_hash")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_commit_author: settings
+                .get("hide_commit_author")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_commit_message: settings
+                .get("hide_commit_message")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            hide_repository_url: settings
+                .get("hide_repository_url")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
         })
+    }
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            api_url: Some("https://chronova.dev/api/v1".to_string()),
+            debug: false,
+            hide_file_names: false,
+            hide_project_names: false,
+            hide_branch_names: false,
+            hide_project_folder: false,
+            exclude_unknown_project: false,
+            disable_offline: false,
+            guess_language: false,
+            hostname: None,
+            log_file: None,
+            no_ssl_verify: false,
+            ssl_certs_file: None,
+            metrics: false,
+            include_only_with_project_file: false,
+            ignore_patterns: vec![],
+            include_patterns: vec![],
+            // Git privacy controls - all default to false
+            disable_git_info: false,
+            hide_commit_hash: false,
+            hide_commit_author: false,
+            hide_commit_message: false,
+            hide_repository_url: false,
+        }
     }
 }
 
@@ -224,4 +282,116 @@ offline = false
 
     let config2 = Config::load(config_file2.path().to_str().unwrap()).unwrap();
     assert!(config2.disable_offline); // offline = false means disable_offline = true
+}
+
+#[test]
+fn test_git_privacy_config() {
+    // Test parsing git privacy configuration options
+    let config_file = NamedTempFile::new().unwrap();
+    let config_content = r#"
+[settings]
+disable_git_info = true
+hide_commit_hash = true
+hide_commit_author = false
+hide_commit_message = true
+hide_repository_url = false
+"#;
+    fs::write(config_file.path(), config_content).unwrap();
+
+    let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
+    assert!(config.disable_git_info);
+    assert!(config.hide_commit_hash);
+    assert!(!config.hide_commit_author);
+    assert!(config.hide_commit_message);
+    assert!(!config.hide_repository_url);
+}
+
+#[test]
+fn test_git_privacy_config_defaults() {
+    // Test with minimal config - git privacy fields should default to false
+    let config_file = NamedTempFile::new().unwrap();
+    let config_content = r#"
+[settings]
+api_key = test_key_123
+"#;
+    fs::write(config_file.path(), config_content).unwrap();
+
+    let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
+
+    // All git privacy fields should default to false
+    assert!(!config.disable_git_info);
+    assert!(!config.hide_commit_hash);
+    assert!(!config.hide_commit_author);
+    assert!(!config.hide_commit_message);
+    assert!(!config.hide_repository_url);
+}
+
+#[test]
+fn test_git_privacy_all_enabled() {
+    // Test when all git privacy options are enabled
+    let config_file = NamedTempFile::new().unwrap();
+    let config_content = r#"
+[settings]
+disable_git_info = true
+hide_commit_hash = true
+hide_commit_author = true
+hide_commit_message = true
+hide_repository_url = true
+"#;
+    fs::write(config_file.path(), config_content).unwrap();
+
+    let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
+    assert!(config.disable_git_info);
+    assert!(config.hide_commit_hash);
+    assert!(config.hide_commit_author);
+    assert!(config.hide_commit_message);
+    assert!(config.hide_repository_url);
+}
+
+#[test]
+fn test_git_privacy_default_struct() {
+    // Test Default trait implementation for git privacy fields
+    let config = Config::default();
+
+    assert!(!config.disable_git_info);
+    assert!(!config.hide_commit_hash);
+    assert!(!config.hide_commit_author);
+    assert!(!config.hide_commit_message);
+    assert!(!config.hide_repository_url);
+}
+
+#[test]
+fn test_git_privacy_mixed_with_other_settings() {
+    // Test git privacy settings mixed with other config options
+    let config_file = NamedTempFile::new().unwrap();
+    let config_content = r#"
+[settings]
+api_key = test_key_456
+debug = true
+hide_file_names = true
+hide_branch_names = true
+disable_git_info = false
+hide_commit_hash = true
+hide_commit_author = false
+hide_commit_message = true
+hide_repository_url = true
+offline = true
+"#;
+    fs::write(config_file.path(), config_content).unwrap();
+
+    let config = Config::load(config_file.path().to_str().unwrap()).unwrap();
+
+    // Verify git privacy settings
+    assert!(!config.disable_git_info);
+    assert!(config.hide_commit_hash);
+    assert!(!config.hide_commit_author);
+    assert!(config.hide_commit_message);
+    assert!(config.hide_repository_url);
+
+    // Verify other settings are still parsed correctly
+    assert_eq!(config.api_key, Some("test_key_456".to_string()));
+    assert!(config.debug);
+    assert!(config.hide_file_names);
+    assert!(config.hide_branch_names);
+    assert!(!config.disable_offline); // offline = true means disable_offline = false
 }
