@@ -47,7 +47,18 @@ jobs:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
+      - name: Check token availability
+        id: check-token
+        run: |
+          if [ -z "${{ steps.app-token.outputs.token }}" ] && [ -z "${{ secrets.GH_PERSONAL_TOKEN }}" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No write-capable token available. Configure APP_ID/APP_PRIVATE_KEY or GH_PERSONAL_TOKEN secrets to enable automated reviews."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Post review trigger comment
+        if: steps.check-token.outputs.available == 'true'
         uses: actions/github-script@v9
         env:
           REVIEW_TYPE: ${{ steps.prompt.outputs.type }}

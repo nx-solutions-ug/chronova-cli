@@ -42,13 +42,33 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Check token availability
+        id: check-token
+        run: |
+          if [ -z "${{ steps.app-token.outputs.token }}" ] && [ -z "${{ secrets.GH_PERSONAL_TOKEN }}" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No write-capable token available. Configure APP_ID/APP_PRIVATE_KEY or GH_PERSONAL_TOKEN secrets to enable automated reviews."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install opencode (pinned)
+        if: steps.check-token.outputs.available == 'true'
         shell: bash
         run: |
           curl -fsSL https://opencode.ai/install | bash -s -- --version v1.14.20
           echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
 
       - name: Run opencode
+        if: steps.check-token.outputs.available == 'true'
         shell: bash
         run: opencode github run
         env:
