@@ -1,0 +1,46 @@
+name: code-review
+
+# Auto-reviews human-authored PRs by posting a trigger comment.
+# The opencode.yml workflow picks up the comment and performs the review.
+# Uses GitHub App token (preferred) or GH_PERSONAL_TOKEN as fallback
+# to bypass GITHUB_TOKEN restrictions on write operations.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: code-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trigger-review:
+    if: >-
+      !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: read
+      issues: read
+
+    steps:
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Post review trigger comment
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: `/oc Review this pull request. Perform these steps IN ORDER:\n\n1. **Understand the change**: Read the PR title, description, and linked issues. Summarize what this PR changes and why.\n2. **Diff review**: For each changed file, check for bugs, logic errors, off-by-one errors, missing error handling, and type safety issues. Reference specific file:line numbers.\n3. **Project conventions**: Verify adherence to AGENTS.md — use thiserror for custom error enums, anyhow::Result for function returns, ? for error propagation, tracing for logging (not println), tokio::spawn for background tasks, spawn_blocking for blocking ops (SQLite), Result<T> return types for repository/trait methods, cargo test/clippy/fmt for quality checks.\n4. **Security**: Check for exposed secrets, SQL injection in raw queries, missing input validation, and auth bypasses.\n5. **Test coverage**: Verify new code paths have corresponding tests. Check that unit tests are in src/test modules or tests/ directory, and that integration tests use wiremock for API mocking.\n6. **Preexisting issues**: Do NOT flag preexisting issues that are not part of this PR's changes.\n7. **Verdict**: Approve the PR if all issues are addressed in a reasonable way. Request changes otherwise. Give a clear MERGE / REQUEST CHANGES / NEEDS DISCUSSION verdict.`
+            });

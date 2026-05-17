@@ -1,0 +1,77 @@
+name: bot-review
+
+# Reviews bot-authored PRs (renovate, dependabot, opencode-agent) and
+# dependency updates. Uses GitHub App token to bypass the GITHUB_TOKEN
+# write restriction that applies to bot-triggered events.
+# Posts a trigger comment that opencode.yml picks up via issue_comment.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: bot-review-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  trigger-bot-review:
+    if: >-
+      endsWith(github.event.pull_request.user.login, '[bot]') ||
+      contains(github.event.pull_request.user.login, 'opencode-agent')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: read
+      issues: read
+
+    steps:
+      - name: Determine review prompt
+        id: prompt
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if [[ "$PR_AUTHOR" == *"renovate"* ]] || [[ "$PR_AUTHOR" == *"dependabot"* ]]; then
+            echo "type=dependency" >> "$GITHUB_OUTPUT"
+          elif [[ "$PR_AUTHOR" == *"opencode-agent"* ]]; then
+            echo "type=opencode" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=code" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Post review trigger comment
+        uses: actions/github-script@v9
+        env:
+          REVIEW_TYPE: ${{ steps.prompt.outputs.type }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
+          script: |
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+            const prTitle = process.env.PR_TITLE;
+            const reviewType = process.env.REVIEW_TYPE;
+
+            let body;
+            if (reviewType === 'dependency') {
+              body = `/oc Review dependency update PR #${prNumber}: "${prTitle}". Perform these steps IN ORDER:\n\n1. **Identify changes**: List every crate being updated with old → new version from Cargo.toml and Cargo.lock.\n2. **Research changelogs**: For each crate, find the release notes between the old and new version. Call out any breaking changes, security fixes, and deprecations.\n3. **Assess impact**: Check if any changed APIs are used in this codebase (search for use/import paths). Note if Cargo.lock resolution is affected.\n4. **Verdict**: Post a Dependency Update Summary comment with:\n   - Changes table (Crate, From, To, Type: major/minor/patch)\n   - Release highlights (breaking changes, security fixes, new features)\n   - Impact assessment checklist (affected code paths, config changes needed)\n   - Recommendation: SAFE TO MERGE / REVIEW RECOMMENDED / ACTION REQUIRED\n5. **Approve** the PR if SAFE TO MERGE, otherwise leave a review requesting changes.`;
+            } else if (reviewType === 'opencode') {
+              body = `/oc Review bot-authored PR #${prNumber}: "${prTitle}". Perform these steps IN ORDER:\n\n1. **Understand intent**: Read the PR description and linked issue. Summarize what the PR intends to change.\n2. **Diff review**: For each changed file, check for bugs, logic errors, missing error handling, and type safety issues.\n3. **Project conventions**: Verify adherence to AGENTS.md conventions — thiserror for custom error enums, anyhow::Result for function returns, ? for error propagation, tracing for logging (not println), tokio::spawn for background tasks, spawn_blocking for blocking ops, Result<T> return types for repository methods, cargo test/clippy/fmt for quality.\n4. **Security**: Check for exposed secrets, SQL injection in raw queries, and missing input validation.\n5. **Test coverage**: Verify new code paths have corresponding tests in src/test modules or tests/ directory. Check that test naming follows convention and integration tests use wiremock for API mocking.\n6. **Approve** if all issues are addressed. Request changes otherwise with specific file:line references.`;
+            } else {
+              body = `/oc Review this pull request for code quality, bugs, security, and adherence to project standards in AGENTS.md. Focus on the specific changes introduced — not general issue management.`;
+            }
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              body
+            });
