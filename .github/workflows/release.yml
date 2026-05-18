@@ -1,187 +1,212 @@
-name: Build and Release
+name: Release
+
+# NOTE: Release Drafter uses the GitHub App token instead of GITHUB_TOKEN because
+# events triggered by GITHUB_TOKEN do not create new workflow runs (GitHub prevents
+# recursive triggers). Using the App token ensures the release:created event fires.
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., v1.0.0)'
-        required: true
-        type: string
-      prerelease:
-        description: 'Mark as prerelease'
-        required: false
-        type: boolean
-        default: false
+  push:
+    branches:
+      - main
+  pull_request_target:
+    types:
+      - closed
+  release:
+    types:
+      - published
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
 
 jobs:
-  build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # Linux targets
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: false
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
-            cross: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            cross: true
-          # macOS targets
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            cross: false
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            cross: false
-          # Windows targets
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
-            cross: false
-          - target: aarch64-pc-windows-msvc
-            os: windows-latest
-            cross: false
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install cross
-        if: matrix.cross
-        run: cargo install cross --git https://github.com/cross-rs/cross
-
-      - name: Build (native)
-        if: '!matrix.cross'
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Build (cross)
-        if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }}
-
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          cd target/${{ matrix.target }}/release
-          tar czf ../../../chronova-cli-${{ inputs.version }}-${{ matrix.target }}.tar.gz chronova-cli
-          cd ../../..
-
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          cd target/${{ matrix.target }}/release
-          Compress-Archive -Path chronova-cli.exe -DestinationPath ../../../chronova-cli-${{ inputs.version }}-${{ matrix.target }}.zip
-          cd ../../..
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: chronova-cli-${{ matrix.target }}
-          path: |
-            chronova-cli-${{ inputs.version }}-${{ matrix.target }}.*
-          if-no-files-found: error
-
-  release:
-    name: Create Release
-    needs: build
+  update-release-draft:
+    name: Update Release Draft
+    if: >-
+      (github.event_name == 'push' && !contains(github.event.head_commit.message, '[skip ci]')) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
+    outputs:
+      draft_tag: ${{ steps.draft-info.outputs.tag }}
+      draft_id: ${{ steps.draft-info.outputs.id }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        continue-on-error: true
         with:
-          path: artifacts
-          pattern: chronova-cli-*
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - name: Collect release files
-        run: |
-          mkdir release
-          find artifacts -name "chronova-cli-*" -exec cp {} release/ \;
-          ls -la release/
-
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Get the previous tag
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ inputs.version }}^ 2>/dev/null || echo "")
-          
-          if [ -z "$PREVIOUS_TAG" ]; then
-            # First release - get all commits
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          else
-            # Get commits since last tag
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREVIOUS_TAG}..HEAD)
-          fi
-          
-          # Create release notes
-          echo "## What's Changed" > RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "$COMMITS" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "## Binaries" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "The following binaries are available:" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          
-          for file in release/*; do
-            filename=$(basename "$file")
-            echo "- \`$filename\`" >> RELEASE_NOTES.md
-          done
-          
-          echo "" >> RELEASE_NOTES.md
-          echo "## Installation" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "Download the appropriate binary for your platform and extract it:" >> RELEASE_NOTES.md
-          echo '```bash' >> RELEASE_NOTES.md
-          echo '# Linux/macOS' >> RELEASE_NOTES.md
-          echo 'tar xzf chronova-cli-${{ inputs.version }}-x86_64-unknown-linux-gnu.tar.gz' >> RELEASE_NOTES.md
-          echo '' >> RELEASE_NOTES.md
-          echo '# Windows' >> RELEASE_NOTES.md
-          echo 'Expand-Archive -Path chronova-cli-${{ inputs.version }}-x86_64-pc-windows-msvc.zip -DestinationPath .' >> RELEASE_NOTES.md
-          echo '```' >> RELEASE_NOTES.md
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ inputs.version }}
-          name: Release ${{ inputs.version }}
-          body_path: RELEASE_NOTES.md
-          files: release/*
-          prerelease: ${{ inputs.prerelease }}
-          generate_release_notes: false
+      - name: Draft or update release
+        id: release-drafter
+        uses: release-drafter/release-drafter@v7
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
 
-      - name: Update version in Cargo.toml
+      - name: Extract draft info
+        id: draft-info
+        if: steps.release-drafter.outputs.draft == 'true'
         run: |
-          # Remove 'v' prefix if present
-          VERSION=${{ inputs.version }}
-          VERSION=${VERSION#v}
-          
-          # Update version in Cargo.toml
-          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-          
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): bump version to ${{ inputs.version }}"
+          echo "tag=${{ steps.release-drafter.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          echo "id=$(gh release view ${{ steps.release-drafter.outputs.tag_name }} --json id -q .id)" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
+
+  review-and-publish:
+    name: Review & Publish Draft
+    needs: update-release-draft
+    if: needs.update-release-draft.outputs.draft_tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Install opencode (pinned)
+        shell: bash
+        run: |
+          curl -fsSL https://opencode.ai/install | bash -s -- --version v1.14.20
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      - name: AI review and publish
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
+          USE_GITHUB_TOKEN: "true"
+          MODEL: ${{ secrets.OPENCODE_MODEL || 'ollama-cloud/glm-5.1' }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          RELEASE_TAG: ${{ needs.update-release-draft.outputs.draft_tag }}
+          RELEASE_ID: ${{ needs.update-release-draft.outputs.draft_id }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          export GH_TOKEN="$GITHUB_TOKEN"
+
+          # Write prompt to file so env vars are not embedded in a heredoc
+          cat > /tmp/release-gate-prompt.md <<'PROMPT'
+          You are the Chronova release gatekeeper. A draft GitHub release was just created by Release Drafter.
+
+          ## Context
+
+          The following environment variables are available for your use:
+          - `RELEASE_TAG` - the release tag name (e.g. v1.2.3)
+          - `RELEASE_ID` - the GitHub release ID
+          - `GITHUB_REPOSITORY` - the repository (owner/repo)
+          - `GH_TOKEN` - GitHub auth token (already exported)
+
+          ## Your Task
+
+          Review the draft release and decide whether to publish it. Follow these steps EXACTLY:
+
+          ### Step 1: Inspect the draft release
+          Run: `gh release view $RELEASE_TAG --json tagName,body,draft,isPrerelease`
+          If the body is empty or just the template heading "## Changes" with no items, stop and reject.
+
+          ### Step 2: Verify contributing PRs have proper labels
+          For each PR number mentioned in the release body (format: `#123`), check that it has:
+          - A type label (bug, feature, enhancement, docs, chore)
+          - A priority label (priority:critical, priority:high, priority:medium, priority:low)
+          Run: `gh pr view <number> --json labels,title` for each PR.
+          If any PR is missing labels, add them based on the PR title and description using:
+          `gh pr edit <number> --add-label <label>`
+
+          ### Step 3: Verify the version resolution makes sense
+          Compare the release tag version with the PR labels:
+          - Any `priority:critical` label → should be a major version bump
+          - Any `feature`/`enhancement` label → should be a minor version bump
+          - Any `bug`/`fix`/`chore`/`docs` label → should be a patch version bump
+          If the version seems wrong (e.g., patch release with a feature PR), leave a comment on the draft.
+
+          ### Step 4: Check CI status on main
+          Run: `gh run list --branch main --limit 3 --json status,conclusion,name`
+          If the most recent workflow runs on main are not all `conclusion: success`, DO NOT publish.
+          Instead, comment on the release explaining which checks failed.
+
+          ### Step 5: Publish or reject
+          If all checks pass, publish the release:
+          `gh release edit $RELEASE_TAG --draft=false`
+
+          If any check fails, DO NOT publish. Instead, add a comment to the release:
+          `gh api repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/comments -f body="<summary of issues found>"`
+
+          ## Rules
+          - NEVER publish if CI is failing on main
+          - NEVER publish if the draft body is empty or just a template
+          - NEVER skip a step — execute all 5 steps
+          - Be concise in your output — log each step result on one line
+          PROMPT
+
+          opencode run --model "$MODEL" --dangerously-skip-permissions --file /tmp/release-gate-prompt.md "Review the draft release $RELEASE_TAG and publish it if all checks pass. Follow the instructions in the attached file exactly."
+
+  update-changelog:
+    name: Update CHANGELOG
+    needs: review-and-publish
+    if: always() && needs.review-and-publish.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        continue-on-error: true
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Configure git
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git"
+
+      - name: Prepend release to CHANGELOG
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
+          RELEASE_TAG: ${{ needs.update-release-draft.outputs.draft_tag }}
+        run: |
+          # Fetch release details from GitHub (publishing already happened in review-and-publish)
+          RELEASE_DATA=$(gh release view "$RELEASE_TAG" --json body,publishedAt)
+          RELEASE_BODY=$(echo "$RELEASE_DATA" | jq -r '.body')
+          RELEASE_DATE=$(echo "$RELEASE_DATA" | jq -r '.publishedAt')
+          VERSION="${RELEASE_TAG#v}"
+          DATE=$(echo "$RELEASE_DATE" | cut -dT -f1)
+          COMPARE_URL="https://github.com/${{ github.repository }}/compare/${RELEASE_TAG}"
+
+          {
+            echo "# [${VERSION}](${COMPARE_URL}) (${DATE})"
+            echo ""
+            echo "${RELEASE_BODY}"
+            echo ""
+          } > /tmp/new_entry.txt
+
+          if [ -f CHANGELOG.md ]; then
+            sed -i '1e cat /tmp/new_entry.txt' CHANGELOG.md
+          else
+            cat /tmp/new_entry.txt > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+          fi
+
+      - name: Commit and push CHANGELOG
+        run: |
+          git add CHANGELOG.md
+          git diff --cached --quiet || git commit -m "chore(release): update CHANGELOG.md [skip ci]"
           git push

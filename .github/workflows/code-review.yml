@@ -25,6 +25,34 @@ jobs:
       issues: write
 
     steps:
+      - name: Check if re-review is needed
+        id: re-review-check
+        if: github.event.action == 'synchronize'
+        uses: actions/github-script@v9
+        with:
+          result-encoding: string
+          script: |
+            // On synchronize, check who pushed the latest commit.
+            // If a bot/agent pushed it (fixing issues from a previous review),
+            // skip re-triggering to avoid an infinite review loop.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            const headSha = pr.head.sha;
+            const { data: commit } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: headSha
+            });
+            const author = commit.commit.author.name || '';
+            const committer = commit.commit.committer.name || '';
+            const isAgentCommit = author.includes('opencode-agent') || committer.includes('opencode-agent')
+              || author.includes('opencode') || committer.includes('opencode')
+              || author.includes('github-actions') || committer.includes('github-actions');
+            return isAgentCommit ? 'false' : 'true';
+
       - name: Generate GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -44,7 +72,9 @@ jobs:
           fi
 
       - name: Post review trigger comment
-        if: steps.check-token.outputs.available == 'true'
+        if: >-
+          steps.check-token.outputs.available == 'true' &&
+          (github.event.action != 'synchronize' || steps.re-review-check.outputs.result == 'true')
         uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token || secrets.GH_PERSONAL_TOKEN }}
@@ -53,5 +83,5 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              body: `/oc Review this pull request. Perform these steps IN ORDER:\n\n1. **Understand the change**: Read the PR title, description, and linked issues. Summarize what this PR changes and why.\n2. **Diff review**: For each changed file, check for bugs, logic errors, off-by-one errors, missing error handling, and type safety issues. Reference specific file:line numbers.\n3. **Project conventions**: Verify adherence to AGENTS.md — use thiserror for custom error enums, anyhow::Result for function returns, ? for error propagation, tracing for logging (not println), tokio::spawn for background tasks, spawn_blocking for blocking ops (SQLite), Result<T> return types for repository/trait methods, cargo test/clippy/fmt for quality checks.\n4. **Security**: Check for exposed secrets, SQL injection in raw queries, missing input validation, and auth bypasses.\n5. **Test coverage**: Verify new code paths have corresponding tests. Check that unit tests are in src/test modules or tests/ directory, and that integration tests use wiremock for API mocking.\n6. **Preexisting issues**: Do NOT flag preexisting issues that are not part of this PR's changes.\n7. **Verdict**: Approve the PR if all issues are addressed in a reasonable way. Request changes otherwise. Give a clear MERGE / REQUEST CHANGES / NEEDS DISCUSSION verdict.`
+              body: `/oc Review this pull request. Perform these steps IN ORDER:\n\n1. **Understand the change**: Read the PR title, description, and linked issues. Summarize what this PR changes and why.\n2. **Fetch review threads**: Use GraphQL to get all existing review threads. Filter to bot-authored threads only. Auto-resolve any that are outdated or fixed.\n3. **Diff review**: Run \`gh pr diff\` and for each changed file, check for: bugs, logic errors, missing error handling, type safety (no \`as any\`, no \`@ts-ignore\`), performance issues, dead code, unreachable code, magic numbers, poor naming, deep nesting, and complex conditionals.\n4. **Project conventions**: Verify adherence to AGENTS.md — import order (Node built-ins → external → @/* → relative), camelCase functions/vars, PascalCase interfaces/types, kebab-case files, Zod schemas for API inputs, prisma singleton, Redis circuit breaker, tailwind breakpoint overrides (sm=768px, md=1024px, lg=1280px, xl=1440px).\n5. **Security**: Check for exposed secrets, SQL injection in raw queries, XSS, missing input validation, and auth bypasses.\n6. **Test coverage**: Verify new code paths have corresponding Jest tests. Check test naming follows "should ..." pattern.\n7. **Deduplicate**: For each identified issue, check unresolved bot threads for semantic matches (same file + same issue type + within ±5 lines = duplicate). Skip duplicates.\n8. **Post review**: Bundle all new inline comments into a single batched review. REQUEST_CHANGES if new issues found, APPROVE if clean, skip if only existing unresolved threads remain. Use PR diff line numbers and repo-relative paths.\n9. **Label the PR**: Ensure labels exist (\`gh label create\` if missing, ignore 422 already exists), then apply based on review findings:\n   - Type (mutually exclusive): \`bug\` (fixes a bug), \`feature\` (new capability), \`enhancement\` (improves existing), \`docs\` (documentation), \`chore\` (maintenance/infra)\n   - Priority (mutually exclusive): \`priority: critical\` (security/data loss), \`priority: high\` (major impact), \`priority: medium\` (normal), \`priority: low\` (nice-to-have)\n   Run: \`gh pr edit {pr_number} --add-label "TYPE" --add-label "priority:LEVEL"\`\n10. **Preexisting issues**: Do NOT flag preexisting issues that are not part of this PR's changes.
             });
