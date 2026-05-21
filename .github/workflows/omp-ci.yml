@@ -1,0 +1,200 @@
+name: omp-ci
+
+on:
+  issues:
+    types: [opened]
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review (triggers review-pr job)"
+        required: false
+      issue_number:
+        description: "Issue number to triage (triggers triage-issue job)"
+        required: false
+
+jobs:
+  triage-issue:
+    if: github.event_name == 'issues' || (github.event_name == 'workflow_dispatch' && github.event.inputs.issue_number != '')
+    concurrency:
+      group: omp-triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+
+      - name: Install OMP
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+
+      - name: Triage issue
+        shell: bash
+        run: |
+          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.issue.number || github.event.inputs.issue_number }}/g' .omp/commands/triage-issue.md)
+          omp -p "$EXPANDED"
+        env:
+          OLLAMA_CLOUD_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
+  label-pr:
+    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    concurrency:
+      group: omp-label-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+
+      - name: Install OMP
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+
+      - name: Label PR
+        shell: bash
+        run: |
+          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/label-pr.md)
+          omp -p "$EXPANDED"
+        env:
+          OLLAMA_CLOUD_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+
+  review-pr:
+    if: >-
+      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '')
+    concurrency:
+      group: omp-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check if re-review is needed (synchronize only)
+        id: re-review-check
+        if: github.event.action == 'synchronize'
+        uses: actions/github-script@v9
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            const headSha = pr.head.sha;
+            const { data: commit } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: headSha
+            });
+            const author = commit.commit.author.name || '';
+            const committer = commit.commit.committer.name || '';
+            const isAgentCommit = author.includes('opencode-agent') || committer.includes('opencode-agent')
+              || author.includes('opencode') || committer.includes('opencode')
+              || author.includes('github-actions') || committer.includes('github-actions')
+              || author.includes('omp-agent') || committer.includes('omp-agent')
+              || author.includes('chronova-agent') || committer.includes('chronova-agent');
+            return isAgentCommit ? 'false' : 'true';
+
+      - name: Determine review type
+        id: review-type
+        env:
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+        run: |
+          if [[ "$PR_AUTHOR" == *"renovate"* ]] || [[ "$PR_AUTHOR" == *"dependabot"* ]]; then
+            echo "prefix=dep:" >> "$GITHUB_OUTPUT"
+          elif [[ "$PR_AUTHOR" == *"[bot]"* ]] || [[ "$PR_AUTHOR" == *"opencode-agent"* ]]; then
+            echo "prefix=bot:" >> "$GITHUB_OUTPUT"
+          else
+            echo "prefix=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check if should skip
+        id: should-skip
+        env:
+          ACTION: ${{ github.event.action || 'opened' }}
+          RE_REVIEW: ${{ steps.re-review-check.outputs.result || 'true' }}
+        run: |
+          skip="false"
+          if [[ "$ACTION" == "synchronize" ]] && [[ "$RE_REVIEW" == "false" ]]; then
+            skip="true"
+          fi
+          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate app token
+        if: steps.should-skip.outputs.skip != 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        if: steps.should-skip.outputs.skip != 'true'
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+
+      - name: Install OMP
+        if: steps.should-skip.outputs.skip != 'true'
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+
+      - name: Review PR
+        if: steps.should-skip.outputs.skip != 'true'
+        shell: bash
+        run: |
+          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
+          omp -p "$EXPANDED"
+        env:
+          OLLAMA_CLOUD_API_KEY: ${{ secrets.OLLAMA_API_KEY }}

@@ -1,0 +1,79 @@
+name: omp
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  agent:
+    if: >-
+      !endsWith(github.event.comment.user.login, '[bot]') &&
+      (
+        contains(github.event.comment.body, ' /omp') ||
+        startsWith(github.event.comment.body, '/omp') ||
+        contains(github.event.comment.body, ' /oc') ||
+        startsWith(github.event.comment.body, '/oc')
+      )
+    concurrency:
+      group: omp-agent-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+
+      - name: Install OMP
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+
+      - name: Extract prompt from comment
+        id: extract-prompt
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+        shell: bash
+        run: |
+          PROMPT=$(echo "$COMMENT_BODY" | sed -E 's/^\/(omp|oc)[[:space:]]*//')
+
+          CMD_NAME=$(echo "$PROMPT" | sed -E 's/^\/([a-z0-9-]+).*/\1/')
+          CMD_FILE=".omp/commands/${CMD_NAME}.md"
+
+          if [[ -f "$CMD_FILE" ]]; then
+            CMD_ARGS=$(echo "$PROMPT" | sed -E 's/^\/[a-z0-9-]+[[:space:]]*//')
+            EXPANDED=$(sed "s/\\\$ARGUMENTS/${CMD_ARGS}/g" "$CMD_FILE")
+            echo "$EXPANDED" > /tmp/omp-prompt.txt
+          else
+            echo "$PROMPT" > /tmp/omp-prompt.txt
+          fi
+
+          echo "has_prompt=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run OMP
+        if: steps.extract-prompt.outputs.has_prompt == 'true'
+        shell: bash
+        run: omp -p "$(cat /tmp/omp-prompt.txt)"
+        env:
+          OLLAMA_CLOUD_API_KEY: ${{ secrets.OLLAMA_API_KEY }}

@@ -1,0 +1,15 @@
+model: ollama-cloud/devstral-2:123b
+
+agents:
+  build:
+    model: ollama-cloud/glm-5.1
+  explore:
+    model: ollama-cloud/devstral-2:123b
+  general:
+    model: ollama-cloud/devstral-2:123b
+
+instructions:
+  - AGENTS.md
+
+permission:
+  "*": allow
