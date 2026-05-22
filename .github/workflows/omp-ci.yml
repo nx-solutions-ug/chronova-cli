@@ -57,7 +57,9 @@ jobs:
           OLLAMA_CLOUD_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
 
   label-pr:
-    if: github.event_name == 'pull_request' && github.event.action == 'opened'
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review')
     concurrency:
       group: omp-label-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -84,13 +86,39 @@ jobs:
       - name: Authenticate gh CLI
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
 
+      - name: Check if labels already applied
+        id: label-skip
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          TYPE_LABELS="bug feature enhancement docs chore"
+          PRIORITY_LABELS="priority: critical priority: high priority: medium priority: low"
+          LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
+          has_type=false
+          has_priority=false
+          for label in $TYPE_LABELS; do
+            if echo "$LABELS" | grep -qx "$label"; then has_type=true; break; fi
+          done
+          for label in $PRIORITY_LABELS; do
+            if echo "$LABELS" | grep -qx "$label"; then has_priority=true; break; fi
+          done
+          if [[ "$has_type" == "true" && "$has_priority" == "true" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping: PR #$PR_NUMBER already has type and priority labels"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install OMP
+        if: steps.label-skip.outputs.skip != 'true'
         shell: bash
         run: |
           curl -fsSL https://omp.sh/install | sh
           echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
 
       - name: Label PR
+        if: steps.label-skip.outputs.skip != 'true'
         shell: bash
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/label-pr.md)
