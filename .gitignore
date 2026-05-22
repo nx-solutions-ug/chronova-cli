@@ -15,3 +15,5 @@
 
 # Worktrees directory
 worktrees/
+.idea
+.opencode
