@@ -14,7 +14,7 @@ gh pr diff $ARGUMENTS
 
 ## Step 3: Skip check
 
-Check the PR's current labels (from Step 1). If the PR already has **both** a type label (`bug`, `feature`, `enhancement`, `docs`, `chore`) **and** a priority label (`priority: critical`, `priority: high`, `priority: medium`, `priority: low`), **STOP immediately** — do not apply labels, do not post any comment.
+Check the PR's current labels (from Step 1). If the PR already has **both** a type label (`bug`, `feature`, `enhancement`, `docs`, `chore`) **and** a priority label (`priority: critical`, `priority: high`, `priority: medium`, `priority: low`), **STOP immediately** — do not apply labels, do not post any comment, do not proceed further.
 
 Print a one-line skip message and exit:
 ```
@@ -82,6 +82,6 @@ Labeled PR #$ARGUMENTS with <type> and <priority>.
 - **MUST** skip if both a type label and a priority label are already present.
 - **MUST NOT** remove any existing labels.
 - **MUST** apply exactly one type label and one priority label.
-- **MUST NOT** post comments to the PR.
+- **MUST NOT** post comments to the PR — not when skipping, not when labeling, not ever.
 - **MUST NOT** expand scope beyond labeling (no code changes, no assignment suggestions, no review comments).
 - **MUST NOT** push commits or modify any files.
