@@ -1,0 +1,60 @@
+name: Auto Manage
+
+# Consolidates all automatic issue/PR management:
+# - Tags new/reopened issues with `needs-triage`
+# - Auto-assigns new issues and PRs to niklasschaeffer
+
+on:
+  issues:
+    types: [opened, reopened]
+  pull_request:
+    types: [opened]
+
+jobs:
+  tag-issue:
+    name: Tag Issue
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Tag with needs-triage
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh issue edit "$NUMBER" --add-label "needs-triage"
+
+  assign:
+    name: Auto Assign
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Assign to niklasschaeffer
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+        run: |
+          if [[ "$IS_PR" == "true" ]]; then
+            gh pr edit "$NUMBER" --add-assignee niklasschaeffer
+          else
+            gh issue edit "$NUMBER" --add-assignee niklasschaeffer
+          fi
