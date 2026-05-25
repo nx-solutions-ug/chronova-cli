@@ -44,11 +44,26 @@ jobs:
       - name: Authenticate gh CLI
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          no-cache: 'true'
+
       - name: Install OMP
         shell: bash
         run: |
-          curl -fsSL https://omp.sh/install | sh
-          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://omp.sh/install | sh -s -- --source
+          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate OMP
+        shell: bash
+        run: |
+          omp config path > /dev/null 2>&1
+          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
+
+      - name: Populate OMP models
+        shell: bash
+        run: omp --list-models ollama-cloud > /dev/null 2>&1
 
       - name: Extract prompt from comment
         id: extract-prompt
@@ -75,5 +90,3 @@ jobs:
         if: steps.extract-prompt.outputs.has_prompt == 'true'
         shell: bash
         run: omp -p "$(cat /tmp/omp-prompt.txt)"
-        env:
-          OLLAMA_CLOUD_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
