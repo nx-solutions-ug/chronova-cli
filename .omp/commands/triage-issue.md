@@ -1,23 +1,41 @@
-You MUST triage issue $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
+You MUST triage issue $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately. React with the 👀 emoji to the triggering comment.
 
 ## Step 1: Read the issue
 
-Fetch the issue title, body, existing labels, and **all comments** using `gh`. Comments often contain critical context:
+Fetch the issue title, body, existing labels, issue type, priority field, and **all comments** using `gh`. Comments often contain critical context:
 
 ```bash
-gh issue view $ARGUMENTS --json title,body,labels,comments --jq '{title: .title, body: .body, labels: [.labels[].name], comments: [.comments[] | {author: .author.login, body: .body}]}'
+gh issue view $ARGUMENTS --json title,body,labels --jq '{title: .title, body: .body, labels: [.labels[].name]}'
+```
+
+Read the issue type and priority field values:
+
+```bash
+gh api repos/{owner}/{repo}/issues/$ARGUMENTS -H "X-GitHub-Api-Version: 2026-03-10" --jq '{type: .type.name, priority: (.priority // null)}'
+```
+
+Read the issue field values (for priority):
+
+```bash
+gh api repos/{owner}/{repo}/issues/$ARGUMENTS/issue-field-values -H "X-GitHub-Api-Version: 2026-03-10" --jq '[.[] | {field_id: .issue_field_id, value: .single_select_option.name}]'
+```
+
+Read all comments:
+
+```bash
+gh issue view $ARGUMENTS --json comments --jq '[.comments[] | {author: .author.login, body: .body}]'
 ```
 
 ## Step 2: Skip check
 
-Check the issue's current labels (from Step 1). If **any** of the following are true, **STOP immediately**:
+Check the issue's current type field, priority field value, and labels (from Step 1). If **any** of the following are true, **STOP immediately**:
 
-- The issue already has **both** a type label (`bug`, `feature`, `enhancement`, `docs`, `chore`) **and** a priority label (`priority: critical`, `priority: high`, `priority: medium`, `priority: low`).
+- The issue has an **issue type** set (e.g. Bug, Feature, Task) **and** a **priority field value** set (Urgent, High, Medium, Low).
 - The issue has the `accepted` status label.
 
 Print a one-line skip message and exit:
 ```
-Skipped issue #$ARGUMENTS: already has type + priority labels, or is accepted.
+Skipped issue #$ARGUMENTS: already has type + priority fields, or is accepted.
 ```
 
 ## Step 3: Ensure label taxonomy exists
@@ -43,54 +61,77 @@ gh label create accepted --color 0e8a16 --description "Accepted by maintainers" 
 
 Using the issue title, body, **and all comments**, determine:
 
-**Type** (apply exactly one):
+**Type** — choose one issue type AND one label:
 
-| Label | When to apply |
-|---|---|
-| `bug` | Existing behavior is broken or produces incorrect results |
-| `feature` | Request for a new capability that does not yet exist |
-| `enhancement` | Request to improve an existing feature |
-| `docs` | Documentation is missing, incorrect, or unclear |
-| `chore` | Maintenance, infrastructure, CI, tooling, or dependency work |
+| Issue Type | Label | When to apply |
+|---|---|---|
+| `Bug` | `bug` | Existing behavior is broken or produces incorrect results |
+| `Feature` | `feature` | Request for a new capability that does not yet exist |
+| `Task` | `enhancement` | Request to improve an existing feature |
+| `Task` | `docs` | Documentation is missing, incorrect, or unclear |
+| `Task` | `chore` | Maintenance, infrastructure, CI, tooling, or dependency work |
 
-**Priority** (apply exactly one):
+**Priority** — choose one priority field value AND one label:
 
-| Label | When to apply |
-|---|---|
-| `priority: critical` | Production is down, data loss, or security vulnerability |
-| `priority: high` | Major feature broken, common workflow blocked, no workaround |
-| `priority: medium` | Normal issue, workaround exists or impact is limited |
-| `priority: low` | Edge case, cosmetic issue, minor inconvenience |
+| Priority Value | Label | When to apply |
+|---|---|---|
+| `Urgent` | `priority: critical` | Production is down, data loss, or security vulnerability |
+| `High` | `priority: high` | Major feature broken, common workflow blocked, no workaround |
+| `Medium` | `priority: medium` | Normal issue, workaround exists or impact is limited |
+| `Low` | `priority: low` | Edge case, cosmetic issue, minor inconvenience |
 
-**Status** (apply exactly one):
-
+**Status** — apply exactly one label:
 - Apply `needs-triage` if the issue is a standard report needing maintainer review.
 - Apply `needs-info` **instead** of `needs-triage` if the issue is clearly a question (how-to, clarification, support request) rather than a bug/feature report.
 - Do **not** apply `accepted` — that is for maintainers to add later.
 
-## Step 5: Apply labels
+## Step 5: Set the issue type
+
+Set the issue type using the GitHub API:
+
+```bash
+gh api repos/{owner}/{repo}/issues/$ARGUMENTS -X PATCH -H "X-GitHub-Api-Version: 2026-03-10" --input - <<'EOF'
+{"type": "<TYPE>"}
+EOF
+```
+
+Where `<TYPE>` is one of: `Bug`, `Feature`, `Task`.
+
+## Step 6: Set the priority field
+
+Set the priority field value using the issue field values API:
+
+```bash
+gh api repos/{owner}/{repo}/issues/$ARGUMENTS/issue-field-values -X PUT -H "X-GitHub-Api-Version: 2026-03-10" --input - <<'EOF'
+{"issue_field_values": [{"field_id": 37534002, "value": "<PRIORITY>"}]}
+EOF
+```
+
+Where `<PRIORITY>` is one of: `Urgent`, `High`, `Medium`, `Low`.
+
+## Step 7: Apply labels
 
 Apply labels using `gh issue edit`. **Never remove existing labels** — only add.
 
 ```bash
-gh issue edit $ARGUMENTS --add-label "<type>,<priority>,<status>"
+gh issue edit $ARGUMENTS --add-label "<type-label>,<priority-label>,<status-label>"
 ```
 
 Example: `gh issue edit $ARGUMENTS --add-label "bug,priority: medium,needs-triage"`
 
-## Step 6: Print summary
+## Step 8: Print summary
 
 Print a single summary line:
 ```
-Triaged issue #$ARGUMENTS: <type> + <priority> + <status>.
+Triaged issue #$ARGUMENTS: <issue-type> + <priority-value> + <status>.
 ```
 
 ## Rules
 
-- **MUST** skip if both a type label and a priority label are already present, or if the issue has `accepted`.
+- **MUST** skip if both the issue type and priority field are already set, or if the issue has the `accepted` label.
 - **MUST NOT** remove any existing labels.
 - **MUST** read **all** comments before classifying — the body alone is often insufficient.
-- **MUST** apply exactly one type label, one priority label, and one status label.
+- **MUST** set exactly one issue type (via API), one priority value (via API), one type label, one priority label, and one status label.
 - **MUST NOT** post comments to the issue.
 - **MUST NOT** expand scope beyond triage (no code changes, no assignment suggestions, no duplicate linking).
 - **MUST NOT** push commits or modify any files.
