@@ -2,9 +2,9 @@ name: omp-ci
 
 on:
   issues:
-    types: [opened]
+    types: [ opened ]
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [ opened, synchronize, ready_for_review ]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -34,9 +34,9 @@ jobs:
 
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Authenticate gh CLI
@@ -67,7 +67,7 @@ jobs:
         shell: bash
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.issue.number || github.event.inputs.issue_number }}/g' .omp/commands/triage-issue.md)
-          omp -p "$EXPANDED"
+          omp --model ollama-cloud/glm-5.1 -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
 
   label-pr:
     if: >-
@@ -91,9 +91,9 @@ jobs:
 
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Authenticate gh CLI
@@ -152,7 +152,7 @@ jobs:
         shell: bash
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/label-pr.md)
-          omp -p "$EXPANDED"
+          omp -p --model ollama-cloud/glm-5.1 --mode json "$EXPANDED" | python3 .omp/stream-log.py
 
   review-pr:
     if: >-
@@ -230,9 +230,9 @@ jobs:
       - name: Generate app token
         if: steps.should-skip.outputs.skip != 'true'
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Authenticate gh CLI
@@ -268,4 +268,4 @@ jobs:
         shell: bash
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
-          omp -p "$EXPANDED"
+          omp -p --model ollama-cloud/glm-5.1 --mode json "$EXPANDED" | python3 .omp/stream-log.py
