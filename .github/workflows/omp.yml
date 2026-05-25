@@ -12,9 +12,7 @@ jobs:
       !endsWith(github.event.comment.user.login, '[bot]') &&
       (
         contains(github.event.comment.body, ' /omp') ||
-        startsWith(github.event.comment.body, '/omp') ||
-        contains(github.event.comment.body, ' /oc') ||
-        startsWith(github.event.comment.body, '/oc')
+        startsWith(github.event.comment.body, '/omp')
       )
     concurrency:
       group: omp-agent-${{ github.event.issue.number || github.event.pull_request.number }}
@@ -36,9 +34,9 @@ jobs:
 
       - name: Generate app token
         id: app-token
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Authenticate gh CLI
@@ -48,7 +46,6 @@ jobs:
         uses: oven-sh/setup-bun@v2
         with:
           no-cache: 'true'
-
       - name: Install OMP
         shell: bash
         run: |
@@ -89,4 +86,4 @@ jobs:
       - name: Run OMP
         if: steps.extract-prompt.outputs.has_prompt == 'true'
         shell: bash
-        run: omp -p "$(cat /tmp/omp-prompt.txt)"
+        run: omp -p --model ollama-cloud/glm-5.1 --mode json "$(cat /tmp/omp-prompt.txt)" | python3 .omp/stream-log.py
