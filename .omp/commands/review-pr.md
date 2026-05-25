@@ -1,4 +1,4 @@
-You MUST review PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
+You MUST review PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately. React with the 👀 to the triggering comment.
 
 ## Step 0: Dedup check
 
@@ -78,23 +78,24 @@ Assign recommendation per package:
 ### 4b. Bot-authored PR review
 
 1. Read the PR description and diff. Summarize the change intent in one paragraph.
-2. Review for: bugs, type safety (`as any`, `@ts-ignore`), security issues, convention violations.
+2. Review for: bugs, type safety (`as any`, `@ts-ignore`), security issues, convention violations per AGENTS.md.
 3. Deduplicate against existing unresolved review threads.
 4. Post review via `gh pr review $ARGUMENTS` — `REQUEST_CHANGES` for bugs/security, `APPROVE` for minor nits.
 
 ### 4c. Human-authored PR review
 
-For chronova-cli (Rust CLI tool): Review for unsafe usage, error handling (no unwrap in production code, proper Result propagation), security, missing tests, hardcoded values.
-
 1. Read the PR description and diff. Summarize the change in one paragraph.
-2. Review for: unsafe usage, error handling (no unwrap in production code, proper Result propagation), security, missing tests, hardcoded values.
+2. Review for: bugs, type safety, security, AGENTS.md conventions (imports, Prisma, Redis, Zod, error handling, null semantics), missing tests, hardcoded values.
 3. Deduplicate against existing unresolved review threads.
-4. Post review via `gh pr review $ARGUMENTS` — `REQUEST_CHANGES` for bugs/security, `APPROVE` for minor nits only.
+4. Post review via `gh pr review $ARGUMENTS` — `REQUEST_CHANGES` for bugs/security/type safety, `APPROVE` for minor nits only.
 
 ## Step 5: Common checks (all review types)
 
-- **Rust safety**: No unnecessary unsafe blocks, proper error handling with Result/Option.
-- **Security**: No exposed secrets, proper input validation.
+- **Type safety**: No `as any`, no `@ts-ignore` / `@ts-expect-error` outside test files.
+- **Zod validation**: All API route inputs are validated with Zod v4 schemas.
+- **Prisma imports**: All Prisma usage imports from `@/lib/prisma`, never `new PrismaClient()`.
+- **Redis imports**: All Redis usage imports from `@/lib/redis`, never raw `ioredis`.
+- **Security**: No exposed secrets, no SQL injection, proper auth checks, CSRF on state-changing endpoints.
 
 ## Step 6: Print summary
 
