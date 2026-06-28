@@ -63,6 +63,9 @@ pub trait QueueOps {
     /// Add a heartbeat to the queue
     fn add(&self, heartbeat: Heartbeat) -> Result<(), QueueError>;
 
+    /// Add multiple heartbeats in a single transaction for bulk insertion performance
+    fn add_batch(&self, heartbeats: Vec<Heartbeat>) -> Result<(), QueueError>;
+
     /// Get pending heartbeats (with optional sync status filtering)
     fn get_pending(
         &self,
@@ -133,6 +136,32 @@ impl QueueOps for Queue {
             entity = %heartbeat.entity,
             project = ?heartbeat.project,
             "Heartbeat added to queue"
+        );
+
+        Ok(())
+    }
+
+    fn add_batch(&self, heartbeats: Vec<Heartbeat>) -> Result<(), QueueError> {
+        if heartbeats.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT OR REPLACE INTO heartbeats (id, data, sync_status) VALUES (?1, ?2, 'pending')",
+            )?;
+            for heartbeat in &heartbeats {
+                let data = serde_json::to_string(heartbeat)?;
+                stmt.execute(params![heartbeat.id, data])?;
+            }
+        }
+        tx.commit()?;
+
+        tracing::info!(
+            operation = "add_batch",
+            count = heartbeats.len(),
+            "Batch added to queue"
         );
 
         Ok(())
@@ -479,6 +508,10 @@ impl Queue {
 
     /// Initialize database schema and indexes
     fn init_database(conn: &Connection) -> Result<(), QueueError> {
+        // Enable WAL mode for better write concurrency and reduced fsync overhead.
+        // This is critical on Windows where default rollback journal mode fsyncs on every INSERT.
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.pragma_update(None, "synchronous", "NORMAL")?;
         // Create table if it doesn't exist with initial schema
         conn.execute(
             "CREATE TABLE IF NOT EXISTS heartbeats (
