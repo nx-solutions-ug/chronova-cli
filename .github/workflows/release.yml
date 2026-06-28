@@ -24,6 +24,9 @@ jobs:
       contents: write
       issues: write
       pull-requests: write
+    defaults:
+      run:
+        working-directory: .github/release-tooling
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -51,16 +54,17 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
-          cache: "npm"
 
       - name: Install dependencies
         run: npm install
 
       - name: Determine version
         id: version
+        working-directory: .
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          cd .github/release-tooling
           if [ -n "${{ inputs.force_version }}" ]; then
             VERSION="${{ inputs.force_version }}"
             VERSION=${VERSION#v}
@@ -200,12 +204,13 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: "lts/*"
-          cache: "npm"
 
       - name: Install dependencies
+        working-directory: .github/release-tooling
         run: npm install
 
       - name: Run semantic-release (create tag + GitHub release)
+        working-directory: .github/release-tooling
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: npx semantic-release ${{ inputs.prerelease && '--prerelease' || '' }}
