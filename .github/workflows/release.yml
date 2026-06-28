@@ -90,13 +90,13 @@ jobs:
         if: steps.version.outputs.released == 'true'
         working-directory: .
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-          cargo update --workspace
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ github.repository }}.git"
           git pull --rebase origin main
+          VERSION="${{ steps.version.outputs.version }}"
+          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
+          cargo update --workspace
           git add Cargo.toml Cargo.lock
           git commit -m "chore(release): bump version to ${{ steps.version.outputs.tag }}" || true
           git push
