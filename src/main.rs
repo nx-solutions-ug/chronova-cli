@@ -150,6 +150,51 @@ async fn main() -> Result<()> {
         ));
     }
 
+    // Handle --check-update: query GitHub for latest release and report
+    if cli.check_update {
+        let updater = chronova_cli::Updater::new()
+            .map_err(|e| anyhow::anyhow!("Failed to initialize updater: {}", e))?;
+        match updater.check_for_update().await {
+            Ok(Some(info)) => {
+                println!(
+                    "Update available: {} (current: {})",
+                    info.version,
+                    env!("CARGO_PKG_VERSION")
+                );
+                println!("Download: {}", info.download_url);
+                return Ok(());
+            }
+            Ok(None) => {
+                println!("Already up to date (v{})", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error checking for update: {}", e);
+                process::exit(1);
+            }
+        }
+    }
+
+    // Handle --self-update: download and install the latest version
+    if cli.self_update {
+        let updater = chronova_cli::Updater::new()
+            .map_err(|e| anyhow::anyhow!("Failed to initialize updater: {}", e))?;
+        match updater.check_and_update().await {
+            Ok(true) => {
+                println!("Successfully updated to the latest version.");
+                println!("Restart chronova-cli to use the new version.");
+                return Ok(());
+            }
+            Ok(false) => {
+                println!("Already up to date (v{})", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error updating: {}", e);
+                process::exit(1);
+            }
+        }
+    }
     // Handle user agent operations
     if cli.user_agent {
         // This would print the user agent and exit
@@ -251,6 +296,28 @@ async fn main() -> Result<()> {
         eprintln!("Failed to load configuration: {}", e);
         process::exit(1);
     });
+
+    // Spawn background auto-update if enabled in config
+    if config.auto_update {
+        if let Ok(updater) = chronova_cli::Updater::new() {
+            tokio::spawn(async move {
+                tracing::debug!("Background auto-update check started");
+                match updater.check_and_update().await {
+                    Ok(true) => {
+                        tracing::info!("Auto-update: installed newer version, restart to apply");
+                    }
+                    Ok(false) => {
+                        tracing::debug!("Auto-update: already up to date");
+                    }
+                    Err(e) => {
+                        tracing::warn!("Auto-update check failed: {}", e);
+                    }
+                }
+            });
+        } else {
+            tracing::debug!("Auto-update enabled but updater initialization failed, skipping");
+        }
+    }
 
     // Handle sync offline activity
     if let Some(_count) = cli.sync_offline_activity {

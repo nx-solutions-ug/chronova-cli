@@ -10,12 +10,12 @@ pub mod heartbeat;
 pub mod logger;
 pub mod queue;
 pub mod sync;
+pub mod updater;
 pub mod user_agent;
-
 // Re-export commonly used types for easier access
 pub use api::ApiClient;
 pub use cli::Cli;
 pub use config::Config;
 pub use heartbeat::HeartbeatManager;
 pub use queue::Queue;
-pub use sync::{ChronovaSyncManager, PerformanceMetrics, SyncConfig, SyncResult};
+pub use updater::Updater;

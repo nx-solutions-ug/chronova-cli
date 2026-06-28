@@ -41,6 +41,7 @@ pub struct Config {
     pub ssl_certs_file: Option<String>,
     pub metrics: bool,
     pub include_only_with_project_file: bool,
+    pub auto_update: bool,
     pub sync_config: SyncConfig,
 }
 
@@ -135,6 +136,10 @@ impl Config {
                 .unwrap_or(false),
             include_only_with_project_file: settings
                 .get("include_only_with_project_file")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
+                .unwrap_or(false),
+            auto_update: settings
+                .get("auto_update")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             sync_config: Self::parse_sync_config(&settings),
@@ -315,6 +320,7 @@ impl Default for Config {
             guess_language: false,
             hostname: None,
             log_file: None,
+            auto_update: false,
             no_ssl_verify: false,
             ssl_certs_file: None,
             metrics: false,

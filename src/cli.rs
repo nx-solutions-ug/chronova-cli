@@ -265,4 +265,12 @@ pub struct Cli {
     /// Print version information and exit
     #[arg(long)]
     pub version: bool,
+
+    /// Check for a newer version and print whether an update is available, then exit.
+    #[arg(long)]
+    pub check_update: bool,
+
+    /// Download and install the latest version from GitHub releases, then exit.
+    #[arg(long)]
+    pub self_update: bool,
 }
