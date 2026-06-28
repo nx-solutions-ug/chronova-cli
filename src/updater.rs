@@ -478,12 +478,33 @@ async fn extract_archive(archive: &Path, dest_dir: &Path, binary_name: &str) -> 
     Ok(extracted)
 }
 
-/// Resolve the path of the currently-running executable.
+/// Resolve the canonical install path for the chronova-cli binary.
 ///
-/// Runs `env::current_exe()` and `fs::canonicalize()` inside `spawn_blocking`
-/// so we do not stall the runtime. Falls back to the unresolved path when
-/// canonicalization fails (e.g. the binary was moved or replaced under us).
-async fn resolve_current_exe() -> Result<PathBuf> {
+/// Prefers `~/.chronova/chronova-cli` when it exists (the standard install location
+/// that `~/.local/bin/chronova-cli` and `~/.wakatime/wakatime-cli` symlink to).
+/// Falls back to `env::current_exe()` canonicalized when the install path doesn't
+/// exist (e.g. running a dev build or a custom install location).
+async fn resolve_install_path() -> Result<PathBuf> {
+    let install_path = tokio::task::spawn_blocking({
+        move || -> Option<PathBuf> {
+            let home = dirs::home_dir()?;
+            let candidate = home.join(".chronova").join("chronova-cli");
+            if candidate.exists() {
+                Some(candidate)
+            } else {
+                None
+            }
+        }
+    })
+    .await
+    .context("install path check task panicked")?;
+
+    if let Some(path) = install_path {
+        debug!(path = %path.display(), "Using canonical install path");
+        return Ok(path);
+    }
+
+    // Fall back to current_exe for non-standard installs
     let raw_exe = tokio::task::spawn_blocking(env::current_exe)
         .await
         .context("current_exe task panicked")?
@@ -499,7 +520,7 @@ async fn resolve_current_exe() -> Result<PathBuf> {
 }
 
 async fn replace_running_binary(new_binary: &Path) -> Result<()> {
-    let current_exe = resolve_current_exe().await?;
+    let current_exe = resolve_install_path().await?;
     let staging = staging_path_for(&current_exe);
     let backup = backup_path_for(&current_exe);
 
