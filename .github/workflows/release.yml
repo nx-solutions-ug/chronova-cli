@@ -1,54 +1,111 @@
-name: Release
+name: Build and Release
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g., v1.0.0)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as prerelease"
+        required: false
+        type: boolean
+        default: false
 
-permissions:
-  contents: read
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  # Run tests first to ensure quality before release
-  test:
-    name: Test
-    runs-on: ubuntu-latest
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux targets
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          # macOS targets
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            cross: false
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            cross: false
+          # Windows targets
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: false
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            cross: false
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v5
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: "25"
-          cache: "npm"
+          targets: ${{ matrix.target }}
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Run TypeScript type check
-        run: npm run type-check
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Run ESLint
-        run: npm run lint
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
 
-  # Run semantic-release if tests pass
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../chronova-cli-${{ inputs.version }}-${{ matrix.target }}.tar.gz chronova-cli
+          cd ../../..
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd target/${{ matrix.target }}/release
+          Compress-Archive -Path chronova-cli.exe -DestinationPath ../../../chronova-cli-${{ inputs.version }}-${{ matrix.target }}.zip
+          cd ../../..
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chronova-cli-${{ matrix.target }}
+          path: |
+            chronova-cli-${{ inputs.version }}-${{ matrix.target }}.*
+          if-no-files-found: error
+
   release:
-    name: Release
-    needs: test
+    name: Create Release
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      issues: write
-      pull-requests: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          persist-credentials: false
+
 
       - name: Generate app token
         id: app-token
@@ -57,20 +114,85 @@ jobs:
           client-id: ${{ secrets.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Configure git for push
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: "25"
-          cache: "npm"
+          path: artifacts
+          pattern: chronova-cli-*
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Collect release files
+        run: |
+          mkdir release
+          find artifacts -name "chronova-cli-*" -exec cp {} release/ \;
+          ls -la release/
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ inputs.version }}^ 2>/dev/null || echo "")
 
-      - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
-        run: npm audit signatures
+          if [ -z "$PREVIOUS_TAG" ]; then
+            # First release - get all commits
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            # Get commits since last tag
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREVIOUS_TAG}..HEAD)
+          fi
 
-      - name: Run semantic-release
+          # Create release notes
+          echo "## What's Changed" > RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "$COMMITS" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "## Binaries" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "The following binaries are available:" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+
+          for file in release/*; do
+            filename=$(basename "$file")
+            echo "- \`$filename\`" >> RELEASE_NOTES.md
+          done
+
+          echo "" >> RELEASE_NOTES.md
+          echo "## Installation" >> RELEASE_NOTES.md
+          echo "" >> RELEASE_NOTES.md
+          echo "Download the appropriate binary for your platform and extract it:" >> RELEASE_NOTES.md
+          echo '```bash' >> RELEASE_NOTES.md
+          echo '# Linux/macOS' >> RELEASE_NOTES.md
+          echo 'tar xzf chronova-cli-${{ inputs.version }}-x86_64-unknown-linux-gnu.tar.gz' >> RELEASE_NOTES.md
+          echo '' >> RELEASE_NOTES.md
+          echo '# Windows' >> RELEASE_NOTES.md
+          echo 'Expand-Archive -Path chronova-cli-${{ inputs.version }}-x86_64-pc-windows-msvc.zip -DestinationPath .' >> RELEASE_NOTES.md
+          echo '```' >> RELEASE_NOTES.md
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: Release ${{ inputs.version }}
+          body_path: RELEASE_NOTES.md
+          files: release/*
+          prerelease: ${{ inputs.prerelease }}
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npx semantic-release
+
+      - name: Update version in Cargo.toml
+        run: |
+          # Remove 'v' prefix if present
+          VERSION=${{ inputs.version }}
+          VERSION=${VERSION#v}
+
+          # Update version in Cargo.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ github.repository }}.git"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): bump version to ${{ inputs.version }}"
+          git push
