@@ -42,7 +42,7 @@ sysinfo = "0.37.2"
 
 [dev-dependencies]
 tempfile = "3.8"
-wiremock = "0.5"
+wiremock = "0.6"
 assert_cmd = "2.0"
 predicates = "3.0"
 tokio-test = "0.4"
