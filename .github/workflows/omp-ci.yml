@@ -17,6 +17,7 @@ on:
 jobs:
   triage-issue:
     if: github.event_name == 'issues' || (github.event_name == 'workflow_dispatch' && github.event.inputs.issue_number != '')
+    timeout-minutes: 30
     concurrency:
       group: omp-triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
       cancel-in-progress: true
@@ -27,7 +28,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -41,6 +42,8 @@ jobs:
 
       - name: Authenticate gh CLI
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+      - name: React to issue
+        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.issue.number || github.event.inputs.issue_number }}/reactions" -f content='eyes'
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -51,7 +54,7 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://omp.sh/install | sh -s -- --source
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate OMP
         shell: bash
@@ -61,18 +64,28 @@ jobs:
 
       - name: Populate OMP models
         shell: bash
-        run: omp --list-models ollama-cloud > /dev/null 2>&1
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
 
       - name: Triage issue
         shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.issue.number || github.event.inputs.issue_number }}/g' .omp/commands/triage-issue.md)
-          omp --model ollama-cloud/glm-5.1 -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp --model ollama-cloud/minimax-m3 -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
+      - name: Dispatch fix-issue workflow
+        if: always()
+        shell: bash
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type='issue-triaged' \
+            -f client_payload[issue_number]="${{ github.event.issue.number || github.event.inputs.issue_number }}"
 
   label-pr:
     if: >-
       github.event_name == 'pull_request' &&
       (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review')
+    timeout-minutes: 30
     concurrency:
       group: omp-label-${{ github.event.pull_request.number }}
       cancel-in-progress: true
@@ -84,7 +97,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -133,7 +146,7 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://omp.sh/install | sh -s -- --source
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate OMP
         if: steps.label-skip.outputs.skip != 'true'
@@ -145,24 +158,26 @@ jobs:
       - name: Populate OMP models
         if: steps.label-skip.outputs.skip != 'true'
         shell: bash
-        run: omp --list-models ollama-cloud > /dev/null 2>&1
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
 
       - name: Label PR
         if: steps.label-skip.outputs.skip != 'true'
         shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/label-pr.md)
-          omp -p --model ollama-cloud/glm-5.1 --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp -p --model ollama-cloud/minimax-m3 --mode json "$EXPANDED" | python3 .omp/stream-log.py
 
   review-pr:
     if: >-
       (github.event_name == 'pull_request' && github.event.action != 'closed') ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '')
+    timeout-minutes: 30
     concurrency:
       group: omp-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 30
     permissions:
       contents: read
       pull-requests: write
@@ -170,7 +185,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -239,6 +254,10 @@ jobs:
         if: steps.should-skip.outputs.skip != 'true'
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
 
+      - name: React to PR
+        if: steps.should-skip.outputs.skip != 'true'
+        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/reactions" -f content='eyes'
+
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
@@ -249,7 +268,7 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://omp.sh/install | sh -s -- --source
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate OMP
         if: steps.should-skip.outputs.skip != 'true'
@@ -261,11 +280,13 @@ jobs:
       - name: Populate OMP models
         if: steps.should-skip.outputs.skip != 'true'
         shell: bash
-        run: omp --list-models ollama-cloud > /dev/null 2>&1
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
 
       - name: Review PR
         if: steps.should-skip.outputs.skip != 'true'
         shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
-          omp -p --model ollama-cloud/glm-5.1 --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp -p --model ollama-cloud/minimax-m3 --mode json "$EXPANDED" | python3 .omp/stream-log.py

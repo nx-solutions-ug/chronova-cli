@@ -27,7 +27,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -41,6 +41,8 @@ jobs:
 
       - name: Authenticate gh CLI
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+      - name: Configure git for push
+        run: gh auth setup-git
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -50,7 +52,7 @@ jobs:
         shell: bash
         run: |
           curl -fsSL https://omp.sh/install | sh -s -- --source
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate OMP
         shell: bash
@@ -60,7 +62,7 @@ jobs:
 
       - name: Populate OMP models
         shell: bash
-        run: omp --list-models ollama-cloud > /dev/null 2>&1
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
 
       - name: Extract prompt from comment
         id: extract-prompt
@@ -85,5 +87,7 @@ jobs:
 
       - name: Run OMP
         if: steps.extract-prompt.outputs.has_prompt == 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
         shell: bash
-        run: omp -p --model ollama-cloud/glm-5.1 --mode json "$(cat /tmp/omp-prompt.txt)" | python3 .omp/stream-log.py
+        run: omp -p --model ollama-cloud/minimax-m3 --mode json "$(cat /tmp/omp-prompt.txt)" | python3 .omp/stream-log.py
