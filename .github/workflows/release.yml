@@ -215,20 +215,43 @@ jobs:
           find artifacts -name "chronova-cli-*" -exec cp {} release/ \;
           ls -la release/
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: "lts/*"
-
-      - name: Install dependencies
-        working-directory: .github/release-tooling
-        run: npm install
-
-      - name: Run semantic-release (create tag + GitHub release)
-        working-directory: .github/release-tooling
+      - name: Create GitHub release
         env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: npx semantic-release ${{ inputs.prerelease && '--prerelease' || '' }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          TAG="${{ needs.determine-version.outputs.tag }}"
+          PREVIOUS_TAG=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || echo "")
+          if [ -z "$PREVIOUS_TAG" ]; then
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
+          else
+            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges "${PREVIOUS_TAG}..HEAD")
+          fi
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "## Binaries"
+            echo ""
+            echo "The following binaries are available:"
+            echo ""
+            for file in release/*; do
+              filename=$(basename "$file")
+              echo "- \`$filename\`"
+            done
+            echo ""
+            echo "## Installation"
+            echo ""
+            echo "Download the appropriate binary for your platform and extract it:"
+            echo '```bash'
+            echo '# Linux/macOS'
+            echo "tar xzf chronova-cli-${TAG}-x86_64-unknown-linux-gnu.tar.gz"
+            echo ''
+            echo '# Windows'
+            echo "Expand-Archive -Path chronova-cli-${TAG}-x86_64-pc-windows-msvc.zip -DestinationPath ."
+            echo '```'
+          } > RELEASE_NOTES.md
+          gh release create "$TAG" --title "Release $TAG" --notes-file RELEASE_NOTES.md ${{ inputs.prerelease && '--prerelease' || '' }} --repo "${{ github.repository }}"
 
       - name: Upload binaries to release
         env:
