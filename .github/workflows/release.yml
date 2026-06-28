@@ -3,9 +3,9 @@ name: Build and Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Version to release (e.g., v1.0.0)"
-        required: true
+      force_version:
+        description: "Force a specific version (skip semantic-release analysis, e.g. v1.3.0)"
+        required: false
         type: string
       prerelease:
         description: "Mark as prerelease"
@@ -17,14 +17,80 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  determine-version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      released: ${{ steps.version.outputs.released }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Configure git for push
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: gh auth setup-git
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Determine version
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -n "${{ inputs.force_version }}" ]; then
+            VERSION="${{ inputs.force_version }}"
+            VERSION=${VERSION#v}
+            VERSION=${VERSION#.}
+            echo "released=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag=v.$VERSION" >> "$GITHUB_OUTPUT"
+          else
+            NEXT_VERSION=$(npx semantic-release --dry-run --no-ci 2>&1 | grep -oP 'The next release version is \K[0-9]+\.[0-9]+\.[0-9]+' || echo "")
+            if [ -z "$NEXT_VERSION" ]; then
+              echo "No release needed"
+              echo "released=false" >> "$GITHUB_OUTPUT"
+              echo "version=" >> "$GITHUB_OUTPUT"
+              echo "tag=" >> "$GITHUB_OUTPUT"
+            else
+              echo "released=true" >> "$GITHUB_OUTPUT"
+              echo "version=$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+              echo "tag=v.$NEXT_VERSION" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
   build:
     name: Build ${{ matrix.target }}
+    needs: determine-version
+    if: needs.determine-version.outputs.released == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux targets
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             cross: false
@@ -37,14 +103,12 @@ jobs:
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
             cross: true
-          # macOS targets
           - target: x86_64-apple-darwin
             os: macos-latest
             cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
             cross: false
-          # Windows targets
           - target: x86_64-pc-windows-msvc
             os: windows-latest
             cross: false
@@ -77,25 +141,26 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          tar czf ../../../chronova-cli-${{ inputs.version }}-${{ matrix.target }}.tar.gz chronova-cli
+          tar czf ../../../chronova-cli-${{ needs.determine-version.outputs.tag }}-${{ matrix.target }}.tar.gz chronova-cli
           cd ../../..
       - name: Package (Windows)
         if: runner.os == 'Windows'
         run: |
           cd target/${{ matrix.target }}/release
-          Compress-Archive -Path chronova-cli.exe -DestinationPath ../../../chronova-cli-${{ inputs.version }}-${{ matrix.target }}.zip
+          Compress-Archive -Path chronova-cli.exe -DestinationPath ../../../chronova-cli-${{ needs.determine-version.outputs.tag }}-${{ matrix.target }}.zip
           cd ../../..
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: chronova-cli-${{ matrix.target }}
           path: |
-            chronova-cli-${{ inputs.version }}-${{ matrix.target }}.*
+            chronova-cli-${{ needs.determine-version.outputs.tag }}-${{ matrix.target }}.*
           if-no-files-found: error
 
   release:
     name: Create Release
-    needs: build
+    needs: [determine-version, build]
+    if: needs.determine-version.outputs.released == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -105,7 +170,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-
+          persist-credentials: false
 
       - name: Generate app token
         id: app-token
@@ -118,6 +183,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: gh auth setup-git
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -129,70 +195,39 @@ jobs:
           mkdir release
           find artifacts -name "chronova-cli-*" -exec cp {} release/ \;
           ls -la release/
-      - name: Generate changelog
-        id: changelog
-        run: |
-          # Get the previous tag
-          PREVIOUS_TAG=$(git describe --tags --abbrev=0 ${{ inputs.version }}^ 2>/dev/null || echo "")
 
-          if [ -z "$PREVIOUS_TAG" ]; then
-            # First release - get all commits
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges)
-          else
-            # Get commits since last tag
-            COMMITS=$(git log --pretty=format:"- %s (%h)" --no-merges ${PREVIOUS_TAG}..HEAD)
-          fi
-
-          # Create release notes
-          echo "## What's Changed" > RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "$COMMITS" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "## Binaries" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "The following binaries are available:" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-
-          for file in release/*; do
-            filename=$(basename "$file")
-            echo "- \`$filename\`" >> RELEASE_NOTES.md
-          done
-
-          echo "" >> RELEASE_NOTES.md
-          echo "## Installation" >> RELEASE_NOTES.md
-          echo "" >> RELEASE_NOTES.md
-          echo "Download the appropriate binary for your platform and extract it:" >> RELEASE_NOTES.md
-          echo '```bash' >> RELEASE_NOTES.md
-          echo '# Linux/macOS' >> RELEASE_NOTES.md
-          echo 'tar xzf chronova-cli-${{ inputs.version }}-x86_64-unknown-linux-gnu.tar.gz' >> RELEASE_NOTES.md
-          echo '' >> RELEASE_NOTES.md
-          echo '# Windows' >> RELEASE_NOTES.md
-          echo 'Expand-Archive -Path chronova-cli-${{ inputs.version }}-x86_64-pc-windows-msvc.zip -DestinationPath .' >> RELEASE_NOTES.md
-          echo '```' >> RELEASE_NOTES.md
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          tag_name: ${{ inputs.version }}
-          name: Release ${{ inputs.version }}
-          body_path: RELEASE_NOTES.md
-          files: release/*
-          prerelease: ${{ inputs.prerelease }}
-          generate_release_notes: false
+          node-version: "lts/*"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run semantic-release (create tag + GitHub release)
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: npx semantic-release
 
-      - name: Update version in Cargo.toml
+      - name: Upload binaries to release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          # Remove 'v' prefix if present
-          VERSION=${{ inputs.version }}
-          VERSION=${VERSION#v}
+          TAG="${{ needs.determine-version.outputs.tag }}"
+          for file in release/*; do
+            gh release upload "$TAG" "$file" --clobber --repo "${{ github.repository }}"
+          done
 
-          # Update version in Cargo.toml
+      - name: Bump version in Cargo.toml
+        run: |
+          VERSION="${{ needs.determine-version.outputs.version }}"
           sed -i "s/^version = \"[^\"]*\"/version = \"$VERSION\"/" Cargo.toml
-
+          cargo update --workspace
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ github.repository }}.git"
+          git pull --rebase origin main
           git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): bump version to ${{ inputs.version }}"
+          git commit -m "chore(release): bump version to ${{ needs.determine-version.outputs.tag }}"
           git push

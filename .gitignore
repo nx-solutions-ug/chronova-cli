@@ -17,3 +17,4 @@
 worktrees/
 .idea
 .opencode
+node_modules/
