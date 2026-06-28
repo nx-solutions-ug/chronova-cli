@@ -229,5 +229,5 @@ jobs:
           git remote set-url origin "https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/${{ github.repository }}.git"
           git pull --rebase origin main
           git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): bump version to ${{ needs.determine-version.outputs.tag }}"
+          git commit -m "chore(release): bump version to ${{ needs.determine-version.outputs.tag }}" || true
           git push
