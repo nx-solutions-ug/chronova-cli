@@ -31,6 +31,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       released: ${{ steps.version.outputs.released }}
+      bumped_sha: ${{ steps.bump.outputs.bumped_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -85,8 +86,8 @@ jobs:
               echo "tag=v.$NEXT_VERSION" >> "$GITHUB_OUTPUT"
             fi
           fi
-
       - name: Bump Cargo.toml before build
+        id: bump
         if: steps.version.outputs.released == 'true'
         working-directory: .
         run: |
@@ -100,6 +101,7 @@ jobs:
           git add Cargo.toml Cargo.lock
           git commit -m "chore(release): bump version to ${{ steps.version.outputs.tag }}" || true
           git push
+          echo "bumped_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.target }}
@@ -138,7 +140,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
+        with:
+          ref: ${{ needs.determine-version.outputs.bumped_sha }}
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -188,6 +191,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: ${{ needs.determine-version.outputs.bumped_sha }}
           fetch-depth: 0
           persist-credentials: false
 
