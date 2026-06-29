@@ -36,7 +36,7 @@ lazy_static = "1.4"
 gethostname = "0.4"
 tracing-appender = "0.2"
 base64 = "0.22"
-rand = "0.8"
+rand = "0.10"
 async-trait = "0.1"
 sysinfo = "0.37.2"
 
