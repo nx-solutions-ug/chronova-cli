@@ -199,7 +199,7 @@ impl DataCollector {
             // We're in a worktree - discover the worktree's repository for branch detection
             if let Ok(worktree_repo) = Repository::discover(path) {
                 if let Ok(head) = worktree_repo.head() {
-                    head.shorthand().map(|s| s.to_string())
+                    head.shorthand().ok().map(|s| s.to_string())
                 } else {
                     None
                 }
@@ -210,7 +210,7 @@ impl DataCollector {
             // Not in a worktree - use the main repo's HEAD
             repo.head()
                 .ok()
-                .and_then(|h| h.shorthand().map(|s| s.to_string()))
+                .and_then(|h| h.shorthand().ok().map(|s| s.to_string()))
         };
 
         // Get commit info from the worktree's HEAD (not main repo's HEAD)
@@ -226,13 +226,13 @@ impl DataCollector {
         let commit_hash = commit.as_ref().map(|c| c.id().to_string());
         let commit_author = commit
             .as_ref()
-            .and_then(|c| c.author().name().map(|s| s.to_string()));
+            .and_then(|c| c.author().name().ok().map(|s| s.to_string()));
         let commit_message = commit
             .as_ref()
-            .and_then(|c| c.message().map(|s| s.to_string()));
+            .and_then(|c| c.message().ok().map(|s| s.to_string()));
 
         let repository_url = repo.find_remote("origin").ok().and_then(|r| {
-            r.url().map(|s| {
+            r.url().ok().map(|s| {
                 // sanitize remote URL to remove sensitive userinfo (user:pass or token before '@')
                 let raw = s.to_string();
 
