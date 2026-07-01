@@ -28,7 +28,7 @@ git2 = { version = "0.21", features = ["vendored-openssl"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
-thiserror = "1.0"
+thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.0", features = ["v4"] }
 rusqlite = { version = "0.40", features = ["bundled", "fallible_uint"] }
