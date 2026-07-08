@@ -11,20 +11,28 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   update:
     runs-on: ubuntu-latest
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           persist-credentials: true
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: "22"
+          node-version: "25"
 
       - name: Enable pnpm
         run: corepack enable pnpm
@@ -40,7 +48,6 @@ jobs:
         run: node /tmp/openwiki/dist/cli.js --update --print
         env:
           OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
-          OLLAMA_BASE_URL: https://ollama.com
           OPENWIKI_MODEL_ID: minimax-m3
           OPENWIKI_PROVIDER: "ollama"
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
@@ -48,8 +55,9 @@ jobs:
           LANGCHAIN_TRACING_V2: ${{ secrets.LANGSMITH_API_KEY != '' && 'true' || 'false' }}
 
       - name: Create OpenWiki update pull request
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
+          token: ${{ steps.app-token.outputs.token }}
           add-paths: openwiki
           branch: openwiki/update
           commit-message: "docs: update OpenWiki"
