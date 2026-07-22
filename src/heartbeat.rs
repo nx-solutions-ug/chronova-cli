@@ -629,6 +629,18 @@ impl HeartbeatManager {
 mod tests {
     use super::*;
 
+    /// Create a HeartbeatManager backed by an isolated temp database.
+    /// Returns the manager and the TempDir guard — the caller must keep
+    /// the TempDir alive for as long as the manager is used.
+    /// This prevents parallel tests from contending on the shared `~/.chronova/queue.db`.
+    fn create_test_manager(config: Config) -> (HeartbeatManager, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("test_queue.db");
+        let queue = Queue::with_path(db_path).expect("Failed to create test queue");
+        let manager = HeartbeatManager::new_with_queue(config, queue);
+        (manager, temp_dir)
+    }
+
     #[test]
     fn test_should_ignore_entity() {
         let config = Config {
@@ -636,7 +648,7 @@ mod tests {
             ..Default::default()
         };
 
-        let manager = HeartbeatManager::new(config);
+        let (manager, _temp_dir) = create_test_manager(config);
 
         assert!(manager.should_ignore_entity("/path/to/COMMIT_EDITMSG"));
         assert!(manager.should_ignore_entity("/path/to/file.tmp"));
@@ -646,7 +658,7 @@ mod tests {
     #[test]
     fn test_heartbeat_manager_ext_implementation() {
         let config = Config::default();
-        let manager = HeartbeatManager::new(config);
+        let (manager, _temp_dir) = create_test_manager(config);
 
         // Clear any existing heartbeats from the queue first
         let _ = manager.queue.cleanup_old_entries(0); // Remove all entries
@@ -663,7 +675,7 @@ mod tests {
     #[test]
     fn test_get_queue_stats() {
         let config = Config::default();
-        let manager = HeartbeatManager::new(config);
+        let (manager, _temp_dir) = create_test_manager(config);
 
         // Clear any existing heartbeats from the queue first
         let _ = manager.queue.cleanup_old_entries(0); // Remove all entries
@@ -676,10 +688,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "race condition with shared queue database initialization"]
+    #[ignore = "manual_sync internally opens Queue::new() which uses the shared DB path"]
     async fn test_manual_sync() {
         let config = Config::default();
-        let manager = HeartbeatManager::new(config);
+        let (manager, _temp_dir) = create_test_manager(config);
 
         let result = manager.manual_sync().await;
         assert!(result.is_ok(), "manual_sync should return Ok");
@@ -692,7 +704,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "race condition with shared queue - process_queue creates new DB connection"]
+    #[ignore = "manual_sync internally opens Queue::new() which uses the shared DB path"]
     async fn test_manual_sync_with_mock_server_batches() {
         use crate::api::ApiClient;
         use wiremock::matchers::{method, path};
@@ -708,7 +720,7 @@ mod tests {
             .await;
 
         let config = Config::default();
-        let mut manager = HeartbeatManager::new(config);
+        let (mut manager, _temp_dir) = create_test_manager(config);
 
         // Point manager's api_client to the mock server
         manager.api_client = ApiClient::new(mock_server.uri());

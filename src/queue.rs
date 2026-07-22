@@ -512,7 +512,8 @@ impl Queue {
         // This is critical on Windows where default rollback journal mode fsyncs on every INSERT.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        // Create table if it doesn't exist with initial schema
+
+        // Create tables (idempotent)
         conn.execute(
             "CREATE TABLE IF NOT EXISTS heartbeats (
                 id TEXT PRIMARY KEY,
@@ -523,8 +524,6 @@ impl Queue {
             )",
             [],
         )?;
-
-        // Create schema version table if it doesn't exist
         conn.execute(
             "CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER PRIMARY KEY,
@@ -533,7 +532,45 @@ impl Queue {
             [],
         )?;
 
-        // Get current schema version
+        // Apply migration v1 inside an immediate transaction.
+        // BEGIN IMMEDIATE acquires a write lock, so two connections racing
+        // to initialize the same database are serialized: the second waits
+        // for the first to COMMIT before it can even check column existence.
+        conn.execute_batch("BEGIN IMMEDIATE")?;
+
+        let migration_result = Self::apply_migration_v1(conn);
+        match migration_result {
+            Ok(()) => {
+                conn.execute_batch("COMMIT")?;
+            }
+            Err(e) => {
+                // Best-effort rollback; ignore rollback failure
+                let _ = conn.execute_batch("ROLLBACK");
+                return Err(e);
+            }
+        }
+
+        // Create indexes (idempotent, safe outside the transaction)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_heartbeats_sync_status ON heartbeats(sync_status)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_heartbeats_created_at ON heartbeats(created_at)",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_heartbeats_retry_count ON heartbeats(retry_count)",
+            [],
+        )?;
+
+        Ok(())
+    }
+
+    /// Migration v1: add sync_status and sync_metadata columns.
+    /// Must be called inside a `BEGIN IMMEDIATE` transaction so that
+    /// concurrent initializers are serialized.
+    fn apply_migration_v1(conn: &Connection) -> Result<(), QueueError> {
         let current_version: i32 = conn
             .query_row(
                 "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1",
@@ -543,44 +580,29 @@ impl Queue {
             .optional()?
             .unwrap_or(0);
 
-        // Apply migrations if needed
-        if current_version < 1 {
-            // Check if sync_status column already exists before adding it
-            let columns: Vec<String> = conn
-                .prepare("PRAGMA table_info(heartbeats)")?
-                .query_map([], |row| row.get(1))?
-                .collect::<Result<Vec<_>, _>>()?;
-
-            if !columns.contains(&"sync_status".to_string()) {
-                conn.execute(
-                    "ALTER TABLE heartbeats ADD COLUMN sync_status TEXT DEFAULT 'pending'",
-                    [],
-                )?;
-            }
-
-            if !columns.contains(&"sync_metadata".to_string()) {
-                conn.execute("ALTER TABLE heartbeats ADD COLUMN sync_metadata TEXT", [])?;
-            }
-
-            // Update schema version
-            conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
+        if current_version >= 1 {
+            return Ok(());
         }
 
-        // Create indexes for sync performance
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_heartbeats_sync_status ON heartbeats(sync_status)",
-            [],
-        )?;
+        // Check if columns already exist before adding (handles partial migration)
+        let columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(heartbeats)")?
+            .query_map([], |row| row.get(1))?
+            .collect::<Result<Vec<_>, _>>()?;
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_heartbeats_created_at ON heartbeats(created_at)",
-            [],
-        )?;
+        if !columns.contains(&"sync_status".to_string()) {
+            conn.execute(
+                "ALTER TABLE heartbeats ADD COLUMN sync_status TEXT DEFAULT 'pending'",
+                [],
+            )?;
+        }
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_heartbeats_retry_count ON heartbeats(retry_count)",
-            [],
-        )?;
+        if !columns.contains(&"sync_metadata".to_string()) {
+            conn.execute("ALTER TABLE heartbeats ADD COLUMN sync_metadata TEXT", [])?;
+        }
+
+        // Record that migration v1 has been applied
+        conn.execute("INSERT INTO schema_version (version) VALUES (1)", [])?;
 
         Ok(())
     }
