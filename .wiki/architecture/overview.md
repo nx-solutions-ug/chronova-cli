@@ -81,7 +81,7 @@ Heartbeats are always written to SQLite first. Sync happens asynchronously after
 
 ### Error handling
 
-- Custom error enums use `thiserror` (e.g., `ConfigError`, `ApiError`, `QueueError`, `UpdaterError`).
+- Custom error enums use `thiserror` v2.x (e.g., `ConfigError`, `ApiError`, `QueueError`, `UpdaterError`).
 - Application functions return `anyhow::Result` and propagate errors with `?`.
 - `main.rs` maps errors to clean exit messages.
 
