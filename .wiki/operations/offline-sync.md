@@ -33,15 +33,17 @@ A `schema_version` table supports future migrations.
 `QueueOps` methods include:
 
 - `add(heartbeat)` — insert a new heartbeat as `Pending`.
+- `add_batch(heartbeats)` — insert multiple heartbeats in one transaction.
 - `get_pending(limit, status_filter)` — fetch entries by status.
 - `update_sync_status(id, status, metadata)` — move an entry to a new state.
 - `remove(id)` — delete a synced heartbeat.
 - `get_retry_count(id)` — inspect retry counter.
 - `increment_retry(id)` — bump retry counter.
-- `cleanup_old_entries(days)` — remove old synced/failed entries.
-- `deduplicate()` — collapse duplicate pending entries.
+- `cleanup_old_entries(days)` — remove old entries.
+- `enforce_max_count(max_count)` — trim oldest entries when the queue exceeds a size limit.
+- `deduplicate(time_window_seconds)` — collapse duplicate pending entries within a time window.
 - `vacuum()` — reclaim disk space.
-- `count_by_status()` / `get_sync_stats()` — produce statistics.
+- `count_by_status()` / `get_sync_stats()` / `count()` — produce statistics.
 
 ## Sync status lifecycle
 
