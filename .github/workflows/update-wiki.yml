@@ -1,0 +1,125 @@
+name: Wiki Update
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate token
+        id: token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+        continue-on-error: true
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          token: ${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "25"
+
+      - name: Install Wiki Agent
+        run: bun add -g @chronova/wiki-agent
+
+      - name: Run Wiki Agent
+        run: wiki --update --print --verbose --wiki
+        env:
+          WIKI_OLLAMA_MODE: cloud
+          WIKI_OLLAMA_API_KEY: ${{ secrets.WIKI_OLLAMA_API_KEY }}
+          WIKI_MODEL: ${{ vars.WIKI_MODEL || 'kimi-k2.7-code' }}
+          GH_TOKEN: ${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}
+
+      - name: Generate timestamp
+        id: timestamp
+        run: echo "timestamp=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Check for changes
+        id: report
+        run: |
+          # Collect changes under .wiki (tracked + untracked), excluding
+          # the run metadata files. Only content changes open a PR.
+          changes=$(git status --porcelain .wiki | sed 's/^...//' | grep -vE '^\.wiki/\.(last-update-report\.md|last-updated\.json)$' | sed '/^[[:space:]]*$/d')
+          if [ -n "$changes" ]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            cat .wiki/.last-update-report.md >> $GITHUB_OUTPUT
+            echo "" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Repository coordinates
+        id: coords
+        run: echo "owner_repo=${GITHUB_REPOSITORY}" >> $GITHUB_OUTPUT
+
+      - name: Detect wiki initialization
+        id: wiki-init
+        env:
+          TOKEN: ${{ secrets.WIKI_PUSH_TOKEN || steps.token.outputs.token || secrets.GITHUB_TOKEN }}
+        run: |
+          REMOTE="https://x-access-token:${TOKEN}@github.com/${{ steps.coords.outputs.owner_repo }}.wiki.git"
+          if git ls-remote --exit-code "$REMOTE" HEAD >/dev/null 2>&1; then
+            echo "initialized=true" >> $GITHUB_OUTPUT
+          else
+            echo "initialized=false" >> $GITHUB_OUTPUT
+            echo "::warning::Wiki is not initialized. Create the first page in the GitHub UI (Wiki tab -> New Page), then rerun. Staging PR will still be opened." >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to wiki repo
+        id: publish
+        if: steps.report.outputs.has_changes == 'true' && steps.wiki-init.outputs.initialized == 'true'
+        env:
+          TOKEN: ${{ secrets.WIKI_PUSH_TOKEN || steps.token.outputs.token || secrets.GITHUB_TOKEN }}
+        run: |
+          WIKI_URL="https://x-access-token:${TOKEN}@github.com/${{ steps.coords.outputs.owner_repo }}.wiki.git"
+          rm -rf /tmp/wiki /tmp/wiki-flat
+          wiki-flatten "$GITHUB_WORKSPACE/.wiki" /tmp/wiki-flat
+          git clone "$WIKI_URL" /tmp/wiki
+          cd /tmp/wiki
+          # rsync the flattened wiki output (flat names, Home.md, _Sidebar.md).
+          # --exclude='.git' protects the wiki clone's .git directory from --delete.
+          rsync -a --delete \
+            --exclude='.git' \
+            /tmp/wiki-flat/ ./
+          git add -A
+          if ! git diff --cached --quiet; then
+            git -c user.name='wiki-agent[bot]' -c user.email='bot@wiki-agent' \
+              commit -m "docs: update wiki"
+            if ! git push origin master 2>&1 | tee /tmp/wiki-push.log; then
+              echo "::error::Failed to push to the wiki repo. Ensure the GitHub App has contents:write on the repository (which covers the wiki), or set a WIKI_PUSH_TOKEN secret with repo scope."
+              exit 1
+            fi
+            echo "published=true" >> $GITHUB_OUTPUT
+          else
+            echo "::warning::No net wiki content changes after sync; skipping wiki push."
+            echo "published=false" >> $GITHUB_OUTPUT
+          fi
+      - name: Create wiki staging snapshot pull request
+        uses: peter-evans/create-pull-request@v8
+        if: steps.report.outputs.has_changes == 'true'
+        with:
+          token: ${{ secrets.WIKI_PUSH_TOKEN || steps.token.outputs.token || secrets.GITHUB_TOKEN }}
+          branch: wiki/staging-${{ steps.timestamp.outputs.timestamp }}
+          add-paths: .wiki
+          title: "docs: wiki staging snapshot"
+          body: ${{ steps.report.outputs.body }}
