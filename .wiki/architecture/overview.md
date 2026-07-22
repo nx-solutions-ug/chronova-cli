@@ -29,20 +29,16 @@ The crate root is `src/lib.rs`, which declares and re-exports the public modules
 
 ## Dependency graph
 
-```
-main.rs
-├── cli.rs
-├── config.rs
-└── heartbeat.rs
-    ├── api.rs
-    ├── collector.rs
-    ├── queue.rs
-    │   └── sync.rs (status model)
-    └── user_agent.rs
+The library crate `src/lib.rs` declares all modules and re-exports the public surface. The binary `src/main.rs` consumes those re-exports. Modules are connected as follows:
 
-logger.rs — used by main.rs for tracing setup
-updater.rs — used by main.rs for --check-update and --self-update
-```
+| Consumer | Depends on |
+|---|---|
+| `main.rs` | `Cli` (`cli.rs`), `Config` (`config.rs`), `HeartbeatManager` / `HeartbeatManagerExt` (`heartbeat.rs`), `logger.rs`, `updater.rs` |
+| `heartbeat.rs` | `Cli`, `Config`, `ApiClient` / `AuthenticatedApiClient` (`api.rs`), `Queue` (`queue.rs`), `DataCollector` (`collector.rs`), `user_agent.rs`, `sync.rs` (status model + `SyncResult`) |
+| `queue.rs` | `heartbeat.rs` (`Heartbeat`), `sync.rs` (`SyncStatus`) |
+| `sync.rs` | `api.rs`, `queue.rs` (`Queue`, `QueueOps`) |
+| `api.rs` | `heartbeat.rs` (`Heartbeat`) |
+| `updater.rs` | `reqwest`, `tokio::process::Command` |
 
 ## Critical paths
 
@@ -63,7 +59,7 @@ updater.rs — used by main.rs for --check-update and --self-update
 
 ### Error flow
 
-1. Any fallible function returns `anyhow::Result` or a typed `thiserror` enum.
+1. Fallible functions return `anyhow::Result` or a typed `thiserror` enum (`ConfigError`, `ApiError`, `QueueError`, `UpdaterError`, `SyncError`).
 2. `tracing::error!` records the failure path.
 3. The error propagates up to `main.rs`, which prints a user-friendly message and exits.
 
@@ -71,7 +67,30 @@ updater.rs — used by main.rs for --check-update and --self-update
 
 ### Offline-first queue
 
-Heartbeats are always written to SQLite first. Sync happens asynchronously after queuing, so editor activity is never lost during network outages. The queue supports batched reads, status tracking, retries, and cleanup.
+Heartbeats are always written to SQLite first. Sync happens asynchronously after queuing, so editor activity is never lost during network outages.
+
+The queue is implemented in `src/queue.rs` via `Queue` (which implements `QueueOps`). It stores data in `~/.chronova/queue.db`, enables WAL journal mode (`journal_mode=WAL`, `synchronous=NORMAL`), and initializes/migrates the following schema:
+
+- `heartbeats` table: `id TEXT PRIMARY KEY`, `data TEXT` (serialized `Heartbeat`), `sync_status TEXT` (default `pending`), `sync_metadata TEXT`, `retry_count INTEGER` (default 0), `created_at DATETIME` (default `CURRENT_TIMESTAMP`), `last_attempt DATETIME`.
+- `schema_version` table: tracks applied migrations (migration v1 adds `sync_status` and `sync_metadata`).
+- Indexes on `sync_status`, `created_at`, and `retry_count`.
+
+Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
+
+- `enabled`: `true`
+- `max_queue_size`: 1000
+- `batch_size`: 50
+- `sync_interval_seconds`: 300 (5 minutes)
+- `max_retry_attempts`: 5
+- `retry_base_delay_seconds`: 1
+- `retry_max_delay_seconds`: 60
+- `retry_use_jitter`: `true`
+- `retention_days`: 7
+- `background_sync`: `true`
+
+Note: `ChronovaSyncManager::force_sync()` currently delegates to `sync_pending()`; the interactive `--force-sync` path in `main.rs` uses `HeartbeatManager` logic.
+
+`QueueOps` methods include `add`, `add_batch`, `get_pending`, `update_sync_status`, `remove`, `count_by_status`, `get_sync_stats`, `cleanup_old_entries`, `enforce_max_count`, `deduplicate`, `vacuum`, `increment_retry`, `get_retry_count`, and `count`. Override defaults in `~/.chronova.cfg` with keys such as `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`.
 
 ### Trait-based operations
 
@@ -81,7 +100,7 @@ Heartbeats are always written to SQLite first. Sync happens asynchronously after
 
 ### Error handling
 
-- Custom error enums use `thiserror` v2.x (e.g., `ConfigError`, `ApiError`, `QueueError`, `UpdaterError`).
+- Custom error enums use `thiserror` v2.x (`ConfigError`, `ApiError`, `QueueError`, `UpdaterError`, `SyncError`).
 - Application functions return `anyhow::Result` and propagate errors with `?`.
 - `main.rs` maps errors to clean exit messages.
 
@@ -89,7 +108,7 @@ Heartbeats are always written to SQLite first. Sync happens asynchronously after
 
 - `tokio` runs the main async runtime.
 - All SQLite work is wrapped in `tokio::task::spawn_blocking` to avoid blocking async worker threads.
-- Shared state uses `tokio::sync::RwLock` where needed.
+- Shared sync-manager state uses `tokio::sync::RwLock` and atomics where needed.
 
 ## Public API surface
 
