@@ -172,7 +172,7 @@ jobs:
           Compress-Archive -Path chronova-cli.exe -DestinationPath ../../../chronova-cli-${{ needs.determine-version.outputs.tag }}-${{ matrix.target }}.zip
           cd ../../..
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chronova-cli-${{ matrix.target }}
           path: |
@@ -208,7 +208,7 @@ jobs:
         run: gh auth setup-git
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: artifacts
           pattern: chronova-cli-*
