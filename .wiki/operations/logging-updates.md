@@ -18,9 +18,9 @@ Chronova CLI uses the `tracing` ecosystem for structured logging and ships its o
 
 ### Log file location
 
-Default: `~/.chronova.log`.
+Default: `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`).
 
-Override with `--log-file`. Enable debug logging with `--verbose` or `debug = true` in config.
+Override with `--log-file` or `log_file` in `~/.chronova.cfg`. Enable debug logging with `--verbose` or `debug = true` in config.
 
 ### Output modes
 
@@ -68,13 +68,15 @@ https://github.com/nx-solutions-ug/chronova-cli/releases/download/v.1.2.0/chrono
 
 ### Update errors
 
-`UpdaterError` covers:
+`UpdaterError` (in `src/updater.rs`) covers:
 
 - `Network` — GitHub API or download failures.
 - `Parse` — invalid release JSON.
 - `InvalidVersion` — unexpected version / tag format.
 - `UnsupportedPlatform` — no asset for the current platform.
 - `Io` — filesystem / extract / rename failures.
+
+The update flow uses a minimal RAII temp directory (built on `std::env::temp_dir()`) to hold the downloaded archive and extracted binary.
 
 ## Troubleshooting
 

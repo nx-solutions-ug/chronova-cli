@@ -50,7 +50,9 @@ powershell -ExecutionPolicy Bypass -Command "& {irm https://raw.githubuserconten
 5. Installs the binary to `~/.chronova/` and creates symlinks in `~/.local/bin/`.
 6. Creates `~/.chronova.cfg` with default Chronova settings.
 7. Creates WakaTime-compatible symlinks so existing VSCode extensions work.
-8. Prompts for an API key from [chronova.dev/settings](https://chronova.dev/settings).
+8. Prompts for an API key.
+
+The Windows installer also handles locked executables by staging a `.new`/`.old` rename and removes leftover `.old` files on subsequent updates.
 
 ## Manual download
 
@@ -78,6 +80,8 @@ cargo build --release
 ```
 
 The binary is produced at `target/release/chronova-cli`.
+
+The release profile in `Cargo.toml` enables `lto = true`, `panic = "abort"`, and `opt-level = "z"` for a compact, optimized binary.
 
 ## PATH setup
 
