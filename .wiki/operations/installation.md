@@ -109,6 +109,36 @@ chronova-cli --version
 
 Expected output resembles `chronova-cli v1.3.5`.
 
+## VSCode extension
+
+The installer creates WakaTime-compatible symlinks, so the existing WakaTime VSCode extension uses Chronova CLI without configuration changes.
+
+## Troubleshooting
+
+### Permission denied
+
+If you get permission errors, ensure the binary is executable:
+
+```bash
+chmod +x ~/.chronova/chronova-cli
+```
+
+### Command not found
+
+Ensure `~/.local/bin` is in your PATH:
+
+```bash
+echo $PATH | grep -q ".local/bin" || echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+```
+
+### Windows execution policy
+
+If PowerShell reports an execution-policy error, run as Administrator and execute:
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
 ## Uninstall
 
 ### Linux / macOS
