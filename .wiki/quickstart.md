@@ -5,6 +5,10 @@ description: Install Chronova CLI, configure it, send your first heartbeat, and 
 tags: [quickstart, install, config, heartbeat]
 ---
 
+<p align="center">
+  <img src="../public/banner.png" alt="Chronova CLI — High-Performance Rust Telemetry CLI" width="850" />
+</p>
+
 # Quickstart
 
 Chronova CLI is a WakaTime-compatible CLI that tracks your coding activity. It works as a drop-in replacement for `wakatime-cli` and is built in Rust for performance and reliability.

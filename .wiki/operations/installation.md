@@ -5,6 +5,10 @@ description: Platform-specific installation instructions for Chronova CLI, inclu
 tags: [install, linux, macos, windows, operations]
 ---
 
+<p align="center">
+  <img src="../../public/banner.png" alt="Chronova CLI — High-Performance Rust Telemetry CLI" width="850" />
+</p>
+
 # Installation
 
 Chronova CLI can be installed with one-liner scripts, manually from GitHub releases, or built from source.
