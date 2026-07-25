@@ -2,8 +2,6 @@
   <img src="public/banner.png" alt="Chronova CLI — High-Performance Rust Telemetry CLI" width="850" />
 </p>
 
-# Chronova CLI
-
 [![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
 
