@@ -13,7 +13,7 @@ Chronova CLI is offline-first: every heartbeat is written to a local SQLite queu
 
 The queue is implemented in `src/queue.rs` using `rusqlite` with bundled SQLite. It exposes a `QueueOps` trait so the storage layer can be mocked in tests.
 
-Default queue location: `~/.chronova/queue.db` (override with `--offline-queue-file` or `--offline-queue-file-legacy`).
+Default queue location: `~/.chronova/queue.db` (override with `--offline-queue-file` or `--offline-queue-file-legacy`). The queue file is opened with corruption handling: if `PRAGMA integrity_check` fails, the existing database is backed up to `~/.chronova/queue.db.backup` and a fresh schema is recreated.
 
 ### Schema
 
@@ -64,12 +64,12 @@ Statuses are defined in `src/sync.rs`:
 `HeartbeatManager::process_queue()` drives sync:
 
 1. Open a single DB connection per loop iteration.
-2. Promote retry-eligible `Failed` entries back to `Pending` (up to 3 attempts in the heartbeat manager loop).
+2. Promote retry-eligible `Failed` entries back to `Pending` (up to 3 attempts in the heartbeat manager loop, capped by the per-entry `RetryStrategy` maximum of 5 from `SyncConfig`).
 3. Fetch a batch of `Pending` entries (default batch size 50).
-4. Send each heartbeat (or batch) via `AuthenticatedApiClient`.
+4. Send the batch via `AuthenticatedApiClient` when more than one heartbeat is pending; fall back to individual sends if the batch fails for a non-rate-limit reason.
 5. On success, mark `Synced` and remove the entry from the queue.
 6. On transient failure, mark `Failed` and increment retry count.
-7. On permanent failure (auth, max retries reached by `ChronovaSyncManager`), mark `PermanentFailure`.
+7. On permanent failure (auth, max retries reached by `HeartbeatManager`), mark `PermanentFailure`.
 8. Repeat until no pending entries remain.
 
 ## Retry strategy
@@ -82,7 +82,7 @@ Statuses are defined in `src/sync.rs`:
 - `retry_use_jitter`: true
 - `sync_interval_seconds`: 300 (5 minutes)
 
-These defaults can be overridden in `~/.chronova.cfg` under `[settings]` using the keys `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`.
+These defaults can be overridden in `~/.chronova.cfg` under `[settings]` using the keys `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`.
 
 ## Manual sync
 
@@ -92,10 +92,10 @@ Force an immediate sync of offline activity:
 chronova-cli --sync-offline-activity 100
 ```
 
-Force sync all queued heartbeats regardless of connectivity:
+Force sync all queued heartbeats regardless of connectivity (combine with `--sync-offline-activity`):
 
 ```bash
-chronova-cli --force-sync
+chronova-cli --sync-offline-activity 100 --force-sync
 ```
 
 Inspect queue status:
@@ -110,12 +110,14 @@ Read extra heartbeats from STDIN:
 echo '[{...}]' | chronova-cli --extra-heartbeats
 ```
 
+The `--extra-heartbeats` handler accepts the strict `Heartbeat` JSON shape and a relaxed WakaTime-compatible shape missing the `id` field; missing IDs are generated automatically.
+
 ## Failure handling
 
 - **Network errors** — retry with exponential backoff.
 - **Rate limits** — pause and retry after the backoff window.
 - **Authentication errors** — surfaced immediately; check `api_key` and `api_url`.
-- **Queue corruption** — `queue.rs` has backup/recovery logic to protect the SQLite file.
+- **Queue corruption** — `queue.rs` runs `PRAGMA integrity_check` on open; if it fails, the existing database is backed up to `~/.chronova/queue.db.backup` and a fresh schema is recreated.
 
 ## Related pages
 

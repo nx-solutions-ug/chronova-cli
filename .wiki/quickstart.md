@@ -55,7 +55,7 @@ api_key = your-api-key-here
 api_url = https://chronova.dev/api/v1
 ```
 
-Get your API key from [chronova.dev/settings](https://chronova.dev/settings).
+Get your API key from [chronova.dev/settings](https://chronova.dev/settings). You can also read or write individual config keys with `--config-read <key>` and `--config-write <key> <value>`.
 
 For full configuration options, see [Configuration](./configuration/index.md).
 
@@ -83,6 +83,12 @@ Show today's coding time:
 chronova-cli --today
 ```
 
+Show today's total without the category breakdown:
+
+```bash
+chronova-cli --today --today-hide-categories
+```
+
 Show the number of offline heartbeats currently queued:
 
 ```bash
@@ -93,6 +99,18 @@ Trigger an immediate sync of offline activity:
 
 ```bash
 chronova-cli --sync-offline-activity 100
+```
+
+Force sync all queued heartbeats regardless of connectivity:
+
+```bash
+chronova-cli --sync-offline-activity 100 --force-sync
+```
+
+Check the installed version:
+
+```bash
+chronova-cli --version
 ```
 
 ## Next steps

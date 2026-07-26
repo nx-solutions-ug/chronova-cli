@@ -18,7 +18,7 @@ Chronova CLI uses the `tracing` ecosystem for structured logging and ships its o
 
 ### Log file location
 
-Default: `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`).
+Default: `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`). The installer may also create a symlink from `~/.chronova/chronova.log` for WakaTime compatibility.
 
 Override with `--log-file` or `log_file` in `~/.chronova.cfg`. Enable debug logging with `--verbose` or `debug = true` in config.
 
@@ -49,6 +49,8 @@ Download and install the latest version:
 chronova-cli --self-update
 ```
 
+Enable background auto-update checks by setting `auto_update = true` in `~/.chronova.cfg`.
+
 ### Release conventions
 
 The updater depends on the release layout in `nx-solutions-ug/chronova-cli`:
@@ -76,7 +78,9 @@ https://github.com/nx-solutions-ug/chronova-cli/releases/download/v.1.2.0/chrono
 - `UnsupportedPlatform` — no asset for the current platform.
 - `Io` — filesystem / extract / rename failures.
 
-The update flow uses a minimal RAII temp directory (built on `std::env::temp_dir()`) to hold the downloaded archive and extracted binary.
+The `Updater::new()` constructor maps the current host platform to a Rust target triple; it returns `UnsupportedPlatform` if the current OS/architecture has no mapped asset.
+
+The update flow uses a minimal RAII temp directory under `std::env::temp_dir()` named `chronova-cli-update-{pid}-{nanos}` to hold the downloaded archive and extracted binary. The directory is removed when the update operation completes.
 
 ## Troubleshooting
 
