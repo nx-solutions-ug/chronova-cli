@@ -1,4 +1,15 @@
-You MUST triage issue $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately. React with the 👀 emoji to the triggering comment.
+You MUST triage issue $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
+
+## Step 0: Resolve repository
+
+Determine the full owner/repo slug. Use the GH_REPO environment variable if available, otherwise detect it:
+
+```bash
+REPO_SLUG="${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+echo "Repository: $REPO_SLUG"
+```
+
+Use $REPO_SLUG in all subsequent gh api calls instead of {owner}/{repo}.
 
 ## Step 1: Read the issue
 
@@ -11,13 +22,13 @@ gh issue view $ARGUMENTS --json title,body,labels --jq '{title: .title, body: .b
 Read the issue type and priority field values:
 
 ```bash
-gh api repos/{owner}/{repo}/issues/$ARGUMENTS -H "X-GitHub-Api-Version: 2026-03-10" --jq '{type: .type.name, priority: (.priority // null)}'
+gh api repos/$REPO_SLUG/issues/$ARGUMENTS -H "X-GitHub-Api-Version: 2026-03-10" --jq '{type: .type.name, priority: (.priority // null)}'
 ```
 
 Read the issue field values (for priority):
 
 ```bash
-gh api repos/{owner}/{repo}/issues/$ARGUMENTS/issue-field-values -H "X-GitHub-Api-Version: 2026-03-10" --jq '[.[] | {field_id: .issue_field_id, value: .single_select_option.name}]'
+gh api repos/$REPO_SLUG/issues/$ARGUMENTS/issue-field-values -H "X-GitHub-Api-Version: 2026-03-10" --jq '[.[] | {field_id: .issue_field_id, value: .single_select_option.name}]'
 ```
 
 Read all comments:
@@ -90,7 +101,7 @@ Using the issue title, body, **and all comments**, determine:
 Set the issue type using the GitHub API:
 
 ```bash
-gh api repos/{owner}/{repo}/issues/$ARGUMENTS -X PATCH -H "X-GitHub-Api-Version: 2026-03-10" --input - <<'EOF'
+gh api repos/$REPO_SLUG/issues/$ARGUMENTS -X PATCH -H "X-GitHub-Api-Version: 2026-03-10" --input - <<'EOF'
 {"type": "<TYPE>"}
 EOF
 ```
@@ -102,7 +113,7 @@ Where `<TYPE>` is one of: `Bug`, `Feature`, `Task`.
 Set the priority field value using the issue field values API:
 
 ```bash
-gh api repos/{owner}/{repo}/issues/$ARGUMENTS/issue-field-values -X PUT -H "X-GitHub-Api-Version: 2026-03-10" --input - <<'EOF'
+gh api repos/$REPO_SLUG/issues/$ARGUMENTS/issue-field-values -X PUT -H "X-GitHub-Api-Version: 2026-03-10" --input - <<'EOF'
 {"issue_field_values": [{"field_id": 37534002, "value": "<PRIORITY>"}]}
 EOF
 ```
@@ -119,7 +130,36 @@ gh issue edit $ARGUMENTS --add-label "<type-label>,<priority-label>,<status-labe
 
 Example: `gh issue edit $ARGUMENTS --add-label "bug,priority: medium,needs-triage"`
 
-## Step 8: Print summary
+## Step 8: Post triage summary comment
+
+If the status label applied in Step 7 is `needs-triage` (i.e. the issue is actionable — not a question, not a non-actionable report), post a single comment summarizing the classification and explaining what the follow-up fix workflow will do. Use a heredoc to keep the markdown readable:
+
+```bash
+gh issue comment $ARGUMENTS --body "$(cat <<'EOF'
+## Triage Summary
+
+Thanks for opening this issue. I have classified it and queued it for an automated fix.
+
+**Type:** <issue-type> (`<type-label>`)
+**Priority:** <priority-value> (`<priority-label>`)
+
+### What happens next
+
+1. The `omp-fix-issue` workflow will be triggered automatically.
+2. It will re-read this issue, confirm it is actionable, and add the `accepted` label.
+3. It will create a `fix/issue-$ARGUMENTS` branch (or `feat/issue-$ARGUMENTS` for features/enhancements) from `main` and push it.
+4. It will implement the minimal, correct change in line with `AGENTS.md` conventions, including tests.
+5. It will run the full quality gates (`npm run lint`, `npm run type-check`, `npm test`) and only proceed if all three pass.
+6. It will open a draft pull request that links back to this issue, without merging.
+
+A maintainer will review the resulting PR. If the fix does not match expectations, the PR can be closed and the issue reopened with guidance.
+EOF
+)"
+```
+
+If the status label is `needs-info` (question / missing information), do **not** post a comment — the maintainer review path expects a quiet queue for those. The triage summary line in Step 9 is the only output in that case.
+
+## Step 9: Print summary
 
 Print a single summary line:
 ```
@@ -129,9 +169,10 @@ Triaged issue #$ARGUMENTS: <issue-type> + <priority-value> + <status>.
 ## Rules
 
 - **MUST** skip if both the issue type and priority field are already set, or if the issue has the `accepted` label.
+- **MUST** resolve the repository slug before any gh api calls. Use the GH_REPO environment variable if available.
 - **MUST NOT** remove any existing labels.
 - **MUST** read **all** comments before classifying — the body alone is often insufficient.
 - **MUST** set exactly one issue type (via API), one priority value (via API), one type label, one priority label, and one status label.
-- **MUST NOT** post comments to the issue.
+- **MUST NOT** post comments to the issue, except for the single triage summary comment in Step 8 when the issue is actionable (status label is `needs-triage`).
 - **MUST NOT** expand scope beyond triage (no code changes, no assignment suggestions, no duplicate linking).
 - **MUST NOT** push commits or modify any files.

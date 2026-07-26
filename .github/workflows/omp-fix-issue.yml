@@ -1,0 +1,97 @@
+name: omp-fix-issue
+
+on:
+  repository_dispatch:
+    types: [issue-triaged]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to fix'
+        required: true
+        type: number
+
+jobs:
+  fix-issue:
+    concurrency:
+      group: omp-fix-issue-${{ github.event.client_payload.issue_number || inputs.issue_number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      id-token: write
+      contents: write
+      issues: write
+      pull-requests: write
+
+    steps:
+      - name: Determine issue number
+        id: issue-number
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "number=${{ inputs.issue_number }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "number=${{ github.event.client_payload.issue_number }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+      - name: Configure git for push
+        run: gh auth setup-git
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          no-cache: 'true'
+
+      - name: Install OMP
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh -s -- --source
+          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate OMP
+        shell: bash
+        run: |
+          omp config path > /dev/null 2>&1
+          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
+
+      - name: Populate OMP models
+        shell: bash
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
+
+      - name: Extract prompt from command
+        id: extract-prompt
+        env:
+          ISSUE_NUMBER: ${{ steps.issue-number.outputs.number }}
+        shell: bash
+        run: |
+          CMD_FILE=".omp/commands/fix-issue.md"
+          if [[ -f "$CMD_FILE" ]]; then
+            EXPANDED=$(sed "s/\$ARGUMENTS/${ISSUE_NUMBER}/g" "$CMD_FILE")
+            echo "$EXPANDED" > /tmp/omp-prompt.txt
+            echo "has_prompt=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_prompt=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Fix issue
+        if: steps.extract-prompt.outputs.has_prompt == 'true'
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          omp -p --model ollama-cloud/minimax-m3 --mode json "$(cat /tmp/omp-prompt.txt)" | python3 .omp/stream-log.py
