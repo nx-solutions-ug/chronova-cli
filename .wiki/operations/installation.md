@@ -85,7 +85,7 @@ cargo build --release
 
 The binary is produced at `target/release/chronova-cli`.
 
-The release profile in `Cargo.toml` enables `lto = true`, `panic = "abort"`, and `opt-level = "z"` for a compact, optimized binary.
+The release profile in `Cargo.toml` enables `lto = true`, `panic = "abort"`, and `opt-level = "z"` for a compact, optimized binary. The `Cargo.toml` `repository` field is `https://github.com/chronova/chronova-cli`; release assets and installers are currently published from the `nx-solutions-ug/chronova-cli` repository.
 
 ## PATH setup
 
