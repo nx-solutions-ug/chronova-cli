@@ -1,0 +1,14 @@
+modelRoles:
+  default: ollama-cloud/minimax-m3
+  task: ollama-cloud/minimax-m3
+  commit: ollama-cloud/minimax-m3
+  plan: ollama-cloud/kimi-k2.6
+  designer: ollama-cloud/kimi-k2.6
+  vision: ollama-cloud/qwen3.5:397b
+  smol: ollama-cloud/devstral-2:123b
+  slow: ollama-cloud/qwen3.5:397b
+
+github:
+  enabled: true
+inspect_image:
+  enabled: true
