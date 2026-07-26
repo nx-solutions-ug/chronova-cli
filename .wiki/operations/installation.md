@@ -78,7 +78,7 @@ Pre-built binaries are available on the [releases page](https://github.com/nx-so
 Requires Rust 1.70+.
 
 ```bash
-git clone https://github.com/chronova/chronova-cli.git
+git clone https://github.com/nx-solutions-ug/chronova-cli.git
 cd chronova-cli
 cargo build --release
 ```
