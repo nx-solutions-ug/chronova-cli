@@ -1,47 +1,59 @@
-You MUST review PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately. React with the 👀 to the triggering comment.
+You MUST review PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
 
-## Step 0: Dedup check
+## Step 0: Resolve repository
+
+Determine the full owner/repo slug. Use the GH_REPO environment variable if available, otherwise detect it:
+
+```bash
+REPO_SLUG="${GH_REPO:-$(gh repo view --json nameWithOwner --jq .nameWithOwner)}"
+echo "Repository: $REPO_SLUG"
+```
+
+Use $REPO_SLUG in all subsequent gh api calls instead of {owner}/{repo}.
+
+## Step 1: Dedup check
 
 Before doing anything else, check whether this bot has already posted a review or comment on this PR:
 
 ```bash
-gh api /repos/{owner}/{repo}/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | "\(.id) \(.body[:80])"'
+gh api /repos/$REPO_SLUG/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | "\(.id) \(.body[:80])"'
 ```
 
-If a review from this bot already exists, print `Skipped PR #$ARGUMENTS: review already posted.` and stop.
+If a review from this bot already exists, check if the suggested changes have already been applied.
+If the mentioned issues have been addressed already print `Skipped PR #$ARGUMENTS: review already posted.` and stop.
 
 If any comments starting with `## Dependency Update Summary` from this bot exist, delete them so a fresh summary can be posted:
 
 ```bash
-COMMENT_IDS=$(gh api /repos/{owner}/{repo}/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | select(.body | startswith("## Dependency Update Summary")) | .id')
+COMMENT_IDS=$(gh api /repos/$REPO_SLUG/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | select(.body | startswith("## Dependency Update Summary")) | .id')
 for id in $COMMENT_IDS; do
-  gh api -X DELETE /repos/{owner}/{repo}/issues/comments/$id
+  gh api -X DELETE /repos/$REPO_SLUG/issues/comments/$id
 done
 ```
 
 Then continue with the review.
 
-## Step 1: Read the PR
+## Step 2: Read the PR
 
 ```bash
 gh pr view $ARGUMENTS --json title,body,labels,author,comments --jq '{title: .title, body: .body, labels: [.labels[].name], author: .author.login, comments: [.comments[] | {author: .author.login, body: .body}]}'
 ```
 
-## Step 2: Read the diff
+## Step 3: Read the diff
 
 ```bash
 gh pr diff $ARGUMENTS
 ```
 
-## Step 3: Determine review type from the PR author
+## Step 4: Determine review type from the PR author
 
-- If author is `renovate[bot]` or `dependabot[bot]` → **dependency PR**: follow Step 4a
-- If author contains `[bot]` → **bot-authored PR**: follow Step 4b
-- Otherwise → **human-authored PR**: follow Step 4c
+- If author is `renovate[bot]` or `dependabot[bot]` → **dependency PR**: follow Step 5a
+- If author contains `[bot]` → **bot-authored PR**: follow Step 5b
+- Otherwise → **human-authored PR**: follow Step 5c
 
-## Step 4: Conduct the review
+## Step 5: Conduct the review
 
-### 4a. Dependency PR review
+### 5a. Dependency PR review
 
 1. From the diff, list every package version change (old → new). Focus on `package.json`, `package-lock.json`, `yarn.lock`, or `pnpm-lock.yaml` changes.
 2. For each changed package, research its changelog for: breaking changes, security fixes, deprecations, and peer dependency changes.
@@ -75,21 +87,21 @@ Assign recommendation per package:
 - **REVIEW**: Minor update with deprecations, or changed APIs are used in `src/` but no known breakage.
 - **ACTION REQUIRED**: Major version with breaking changes, or a security vulnerability.
 
-### 4b. Bot-authored PR review
+### 5b. Bot-authored PR review
 
 1. Read the PR description and diff. Summarize the change intent in one paragraph.
 2. Review for: bugs, type safety (`as any`, `@ts-ignore`), security issues, convention violations per AGENTS.md.
 3. Deduplicate against existing unresolved review threads.
 4. Post review via `gh pr review $ARGUMENTS` — `REQUEST_CHANGES` for bugs/security, `APPROVE` for minor nits.
 
-### 4c. Human-authored PR review
+### 5c. Human-authored PR review
 
 1. Read the PR description and diff. Summarize the change in one paragraph.
 2. Review for: bugs, type safety, security, AGENTS.md conventions (imports, Prisma, Redis, Zod, error handling, null semantics), missing tests, hardcoded values.
 3. Deduplicate against existing unresolved review threads.
 4. Post review via `gh pr review $ARGUMENTS` — `REQUEST_CHANGES` for bugs/security/type safety, `APPROVE` for minor nits only.
 
-## Step 5: Common checks (all review types)
+## Step 6: Common checks (all review types)
 
 - **Type safety**: No `as any`, no `@ts-ignore` / `@ts-expect-error` outside test files.
 - **Zod validation**: All API route inputs are validated with Zod v4 schemas.
@@ -97,7 +109,7 @@ Assign recommendation per package:
 - **Redis imports**: All Redis usage imports from `@/lib/redis`, never raw `ioredis`.
 - **Security**: No exposed secrets, no SQL injection, proper auth checks, CSRF on state-changing endpoints.
 
-## Step 6: Print summary
+## Step 7: Print summary
 
 Print a single summary line:
 ```
@@ -111,6 +123,6 @@ Reviewed PR #$ARGUMENTS (<type>): <APPROVE / REQUEST_CHANGES / COMMENT> — <one
 - Do NOT merge the PR.
 - Deduplicate findings against existing unresolved review threads before posting.
 - Use `gh pr review $ARGUMENTS` for code reviews.
-- Use `gh pr comment $ARGUMENTS` for dependency update tables — delete older summary comments before posting a fresh one (Step 0 handles this).
-
-- You MUST perform the dedup check in Step 0 before any other action. If a review from this bot already exists, stop immediately. Old dependency summary comments are deleted in Step 0 so a fresh one can be posted.
+- Use `gh pr comment $ARGUMENTS` for dependency update tables — delete older summary comments before posting a fresh one (Step 1 handles this).
+- You MUST perform the dedup check in Step 1 before any other action. If a review from this bot already exists, stop immediately. Old dependency summary comments are deleted in Step 1 so a fresh one can be posted.
+- MUST resolve the repository slug before any gh api calls. Use the GH_REPO environment variable if available.
