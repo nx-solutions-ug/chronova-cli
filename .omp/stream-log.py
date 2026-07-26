@@ -9,24 +9,65 @@ import json
 import sys
 
 
-def brief(text: str, limit: int = 200) -> str:
-    text = text.strip().replace("\n", "\\n")
+def _as_str(value) -> str:
+    """Coerce an arbitrary JSON-decoded value to a string for safe concatenation.
+
+    JSONL content can include non-string ``text`` fields (None, ints, lists,
+    dicts) when the upstream tool result is not the expected shape. Treat them
+    as empty so downstream joins never raise ``TypeError`` and break the
+    ``omp`` pipe.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, dict)):
+        try:
+            return json.dumps(value, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def brief(text, limit: int = 200) -> str:
+    text = _as_str(text).strip().replace("\n", "\\n")
     return text[:limit] + "..." if len(text) > limit else text
 
 
-def brief_args(args: dict, limit: int = 120) -> str:
+def brief_args(args, limit: int = 120) -> str:
     priority_fields = ["command", "pattern", "query", "path", "paths", "action", "symbol"]
     parts = []
     for key in priority_fields:
-        if key in args:
+        if isinstance(args, dict) and key in args:
             val = args[key]
             if isinstance(val, list):
                 val = ", ".join(str(v) for v in val)
-            parts.append(f"{key}={brief(str(val), 60)}")
+            parts.append(f"{key}={brief(val, 60)}")
     if not parts:
-        s = json.dumps(args, separators=(",", ":"))
+        s = json.dumps(args, separators=(",", ":")) if args is not None else ""
         return s[:limit] + "..." if len(s) > limit else s
     return ", ".join(parts)
+
+
+def _path_from_args(args) -> str:
+    """Extract a display path from a possibly-malformed ``args`` payload.
+
+    Read/write/edit tool events can nest the path under ``path`` directly, or
+    under an ``input`` sub-object. Some tool wrappers serialise the path as a
+    positional argument instead, so fall back to ``brief_args`` when no known
+    shape matches.
+    """
+    if not isinstance(args, dict):
+        return brief_args(args)
+    direct = args.get("path")
+    if isinstance(direct, str):
+        return direct
+    input_block = args.get("input")
+    if isinstance(input_block, dict):
+        nested = input_block.get("path")
+        if isinstance(nested, str):
+            return nested
+    return brief_args(args)
 
 
 turn_number = 0
@@ -57,13 +98,16 @@ for line in sys.stdin:
         if intent:
             print(f"  🔧 {tool}: {intent}")
         elif tool == "bash":
-            print(f"  🔧 bash: {brief(args.get('command', ''), 150)}")
+            command = args.get("command", "") if isinstance(args, dict) else args
+            print(f"  🔧 bash: {brief(command, 150)}")
         elif tool in ("read", "write", "edit"):
-            print(f"  🔧 {tool}: {args.get('path', args.get('input', {}).get('path', ''))}")
+            print(f"  🔧 {tool}: {_path_from_args(args)}")
         elif tool == "search":
-            print(f"  🔧 search: {brief(args.get('pattern', ''), 100)}")
+            pattern = args.get("pattern", "") if isinstance(args, dict) else args
+            print(f"  🔧 search: {brief(pattern, 100)}")
         elif tool == "ast_grep":
-            print(f"  🔧 ast_grep: {brief(args.get('pattern', ''), 60)}")
+            pattern = args.get("pattern", "") if isinstance(args, dict) else args
+            print(f"  🔧 ast_grep: {brief(pattern, 60)}")
         else:
             print(f"  🔧 {tool}({brief_args(args)})")
         sys.stdout.flush()
@@ -76,7 +120,7 @@ for line in sys.stdin:
         out_text = ""
         if isinstance(contents, list):
             out_text = " ".join(
-                c.get("text", "") for c in contents if isinstance(c, dict) and c.get("type") == "text"
+                _as_str(c.get("text")) for c in contents if isinstance(c, dict) and c.get("type") == "text"
             ).strip()
 
         if is_error:
@@ -98,9 +142,9 @@ for line in sys.stdin:
 
         if role == "assistant" and isinstance(content, list):
             texts = [
-                c["text"].strip()
+                _as_str(c.get("text")).strip()
                 for c in content
-                if isinstance(c, dict) and c.get("type") == "text" and c.get("text", "").strip()
+                if isinstance(c, dict) and c.get("type") == "text" and _as_str(c.get("text")).strip()
             ]
             if texts:
                 combined = "\n".join(texts)
@@ -114,8 +158,10 @@ for line in sys.stdin:
         for msg in messages:
             if msg.get("role") == "assistant" and isinstance(msg.get("content"), list):
                 for c in msg["content"]:
-                    if isinstance(c, dict) and c.get("type") == "text" and c.get("text", "").strip():
-                        final_texts.append(c["text"].strip())
+                    if isinstance(c, dict) and c.get("type") == "text":
+                        stripped = _as_str(c.get("text")).strip()
+                        if stripped:
+                            final_texts.append(stripped)
 
         usage = evt.get("usage", {})
         total_tokens = usage.get("totalTokens", 0) if usage else 0
