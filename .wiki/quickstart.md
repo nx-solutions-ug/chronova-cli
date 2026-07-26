@@ -39,7 +39,7 @@ The installer places the binary in `~/.local/bin/` and creates WakaTime-compatib
 If you prefer to build it:
 
 ```bash
-git clone https://github.com/chronova/chronova-cli.git
+git clone https://github.com/nx-solutions-ug/chronova-cli.git
 cd chronova-cli
 cargo build --release
 # Binary is at target/release/chronova-cli
