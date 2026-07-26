@@ -52,10 +52,10 @@ The library crate `src/lib.rs` declares all modules and re-exports the public su
 
 ### Sync flow
 
-1. `Queue::process_queue` retrieves pending heartbeats (batch size 50 by default).
-2. Retry-eligible failed entries are promoted back to `Pending`.
-3. Entries are sent to the API individually or in batches.
-4. Successful entries are removed from the queue; failures are retried up to the configured limit.
+1. `HeartbeatManager::process_queue()` in `src/heartbeat.rs` retrieves pending heartbeats (batch size 50 by default).
+2. Retry-eligible `Failed` entries are promoted back to `Pending`.
+3. Entries are sent to the API via `AuthenticatedApiClient` or `ApiClient`, individually or in batches.
+4. Successful entries are marked `Synced` and removed from the queue; failures are retried up to the configured limit.
 
 ### Error flow
 
@@ -88,7 +88,6 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 - `retention_days`: 7
 - `background_sync`: `true`
 
-Note: `ChronovaSyncManager::force_sync()` currently delegates to `sync_pending()`; the interactive `--force-sync` path in `main.rs` uses `HeartbeatManager` logic.
 
 `QueueOps` methods include `add`, `add_batch`, `get_pending`, `update_sync_status`, `remove`, `count_by_status`, `get_sync_stats`, `cleanup_old_entries`, `enforce_max_count`, `deduplicate`, `vacuum`, `increment_retry`, `get_retry_count`, and `count`. Override defaults in `~/.chronova.cfg` with keys such as `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`.
 
