@@ -21,7 +21,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       id-token: write
-      contents: read
+      contents: write
       pull-requests: write
       issues: write
 
@@ -29,7 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Generate app token
@@ -70,19 +70,29 @@ jobs:
         id: extract-prompt
         env:
           COMMENT_BODY: ${{ github.event.comment.body }}
+          PR_NUMBER: ${{ github.event.issue.number }}
         shell: bash
         run: |
           PROMPT=$(echo "$COMMENT_BODY" | sed -E 's/^\/(omp|oc)[[:space:]]*//')
 
-          CMD_NAME=$(echo "$PROMPT" | sed -E 's/^\/([a-z0-9-]+).*/\1/')
+          # Try to match a command file: the prompt may start with "/command-name" or just "command-name"
+          CMD_NAME=$(echo "$PROMPT" | sed -E 's/^\/?([a-z0-9][a-z0-9-]*).*/\1/')
           CMD_FILE=".omp/commands/${CMD_NAME}.md"
 
           if [[ -f "$CMD_FILE" ]]; then
-            CMD_ARGS=$(echo "$PROMPT" | sed -E 's/^\/[a-z0-9-]+[[:space:]]*//')
+            CMD_ARGS=$(echo "$PROMPT" | sed -E 's/^\/?[a-z0-9-]+[[:space:]]*//')
             EXPANDED=$(sed "s/\\\$ARGUMENTS/${CMD_ARGS}/g" "$CMD_FILE")
             echo "$EXPANDED" > /tmp/omp-prompt.txt
           else
+            # Freeform prompt: append commit/push instructions so the agent
+            # actually persists changes back to the PR branch instead of
+            # staging and ending its turn (see PR #636).
             echo "$PROMPT" > /tmp/omp-prompt.txt
+
+            # Only append commit/push instructions for PR comments, not issue comments
+            if [[ -n "${{ github.event.issue.pull_request }}" ]]; then
+              sed "s/__PR_NUMBER__/${PR_NUMBER}/g" .omp/commands/_pr-commit-push.md >> /tmp/omp-prompt.txt
+            fi
           fi
 
           echo "has_prompt=true" >> "$GITHUB_OUTPUT"
