@@ -41,6 +41,8 @@ jobs:
 
       - name: Authenticate gh CLI
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+      - name: Install gh-pr-review extension
+        run: gh extension install agynio/gh-pr-review --force
       - name: Configure git for push
         run: gh auth setup-git
 
