@@ -55,7 +55,7 @@ api_key = your-api-key-here
 api_url = https://chronova.dev/api/v1
 ```
 
-Get your API key from [chronova.dev/settings](https://chronova.dev/settings). You can also read or write individual config keys with `--config-read <key>` and `--config-write <key> <value>`.
+Get your API key from [chronova.dev/settings](https://chronova.dev/settings). You can also read or write individual config keys with `--config-read <key>` and `--config-write <key> <value>`. Use `--config-section <section>` to target a config section other than the default `[settings]`.
 
 For full configuration options, see [Configuration](./configuration/index.md).
 
@@ -105,6 +105,12 @@ Force sync all queued heartbeats regardless of connectivity:
 
 ```bash
 chronova-cli --sync-offline-activity 100 --force-sync
+```
+
+Print the User-Agent string the CLI would send to the API:
+
+```bash
+chronova-cli --user-agent
 ```
 
 Check the installed version:
