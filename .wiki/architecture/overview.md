@@ -89,7 +89,7 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 - `background_sync`: `true`
 
 
-`QueueOps` methods include `add`, `add_batch`, `get_pending`, `update_sync_status`, `remove`, `count_by_status`, `get_sync_stats`, `cleanup_old_entries`, `enforce_max_count`, `deduplicate`, `vacuum`, `increment_retry`, `get_retry_count`, and `count`. Override defaults in `~/.chronova.cfg` with keys such as `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`.
+`QueueOps` methods include `add`, `add_batch`, `get_pending`, `update_sync_status`, `remove`, `count_by_status`, `get_sync_stats`, `cleanup_old_entries`, `enforce_max_count`, `deduplicate`, `vacuum`, `increment_retry`, `get_retry_count`, and `count`. Override defaults in `~/.chronova.cfg` with keys such as `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`. The `sync_interval` value is in seconds.
 
 > Note: the current `HeartbeatManager` runs sync inline in `process()` rather than using the separate `ChronovaSyncManager` background task. `ChronovaSyncManager` is present in `src/sync.rs` but is not wired into the default heartbeat flow.
 
@@ -98,6 +98,15 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 - `QueueOps` defines the contract for queue storage, making the queue mockable in tests.
 - `HeartbeatManagerExt` adds offline-first and manual sync methods to `HeartbeatManager`.
 - `SyncManager` / `ChronovaSyncManager` defines a sync abstraction and background-sync implementation in `src/sync.rs`. It is not currently wired into the default heartbeat flow; `HeartbeatManager::process_queue()` performs inline sync instead.
+
+### Configuration
+
+`src/config.rs::Config::load()` reads the INI file at the path supplied by `--config` (default `~/.chronova.cfg`) and merges it with CLI overrides for `api_url` and the git-privacy flags. Config precedence is CLI > config file > defaults. Notable defaults include:
+
+- `api_url`: `https://chronova.dev/api/v1`
+- default `ignore_patterns`: `COMMIT_EDITMSG$`, `PULLREQ_EDITMSG$`, `MERGE_MSG$`, `TAG_EDITMSG$`
+- `disable_offline` is driven by the `offline` key (with inverted semantics: `offline = true` means offline queueing is enabled)
+- `sync_config` defaults listed above
 
 ### Error handling
 
