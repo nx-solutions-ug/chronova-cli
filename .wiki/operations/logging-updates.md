@@ -80,7 +80,6 @@ https://github.com/nx-solutions-ug/chronova-cli/releases/download/v.1.2.0/chrono
 
 `Updater::new()` builds a `reqwest::Client` with `rustls-tls` and maps the host OS/architecture to a Rust target triple; it returns `UnsupportedPlatform` if the current platform has no mapped asset.
 
-The constructor maps the current host platform to a Rust target triple.
 
 The update flow uses a minimal RAII temp directory under `std::env::temp_dir()` named `chronova-cli-update-{pid}-{nanos}` to hold the downloaded archive and extracted binary. The directory is removed when the update operation completes.
 
