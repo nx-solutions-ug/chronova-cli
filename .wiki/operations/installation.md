@@ -107,7 +107,7 @@ source ~/.bashrc  # or ~/.zshrc
 chronova-cli --version
 ```
 
-Expected output resembles `chronova-cli v1.3.5`.
+Expected output resembles `chronova-cli v1.4.0`.
 
 ## Uninstall
 
