@@ -94,3 +94,16 @@ Before submitting changes:
 - [ ] Formatted: `cargo fmt`
 - [ ] No compiler warnings
 - [ ] Manual test of changed functionality
+
+<!-- wiki-agent -->
+## Wiki Agent
+
+This repository is managed by [wiki-agent](https://github.com/nx-solutions-ug/wiki-agent).
+Documentation is generated under `.wiki/` and kept in sync via `wiki --update`.
+Do not hand-edit files under `.wiki/` — regenerate them with `wiki --update` instead.
+
+```yaml
+version: 1.13.1
+wiki-path: .wiki/
+initialized: 2026-07-28T08:43:06.159Z
+```

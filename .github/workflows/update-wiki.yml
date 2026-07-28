@@ -12,6 +12,10 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: wiki-update-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   update:
     runs-on: ubuntu-latest
@@ -57,12 +61,19 @@ jobs:
         run: |
           # Collect changes under .wiki (tracked + untracked), excluding
           # the run metadata files. Only content changes open a PR.
-          changes=$(git status --porcelain .wiki | sed 's/^...//' | grep -vE '^\.wiki/\.(last-update-report\.md|last-updated\.json)$' | sed '/^[[:space:]]*$/d')
+          changes=$(git status --porcelain .wiki | sed 's/^...//' | grep -vE '^\.wiki/\.(last-update-report\.md|last-update-title\.txt|last-updated\.json)$' | sed '/^[[:space:]]*$/d')
           if [ -n "$changes" ]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
             echo "body<<EOF" >> $GITHUB_OUTPUT
             cat .wiki/.last-update-report.md >> $GITHUB_OUTPUT
             echo "" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            # PR title + commit message reflecting the actual run. Falls back
+            # to a generic label if the agent did not write the title file.
+            echo "title<<EOF" >> $GITHUB_OUTPUT
+            {
+              if [ -f .wiki/.last-update-title.txt ]; then cat .wiki/.last-update-title.txt; else echo "docs: wiki staging snapshot"; fi
+            } >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           else
             echo "has_changes=false" >> $GITHUB_OUTPUT
@@ -121,5 +132,6 @@ jobs:
           token: ${{ secrets.WIKI_PUSH_TOKEN || steps.token.outputs.token || secrets.GITHUB_TOKEN }}
           branch: wiki/staging-${{ steps.timestamp.outputs.timestamp }}
           add-paths: .wiki
-          title: "docs: wiki staging snapshot"
+          title: ${{ steps.report.outputs.title }}
+          commit-message: ${{ steps.report.outputs.title }}
           body: ${{ steps.report.outputs.body }}
