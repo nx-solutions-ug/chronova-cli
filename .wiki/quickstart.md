@@ -124,3 +124,4 @@ chronova-cli --version
 - Read the [Architecture Overview](./architecture/overview.md) to understand the internals.
 - Learn about [offline behavior and retry logic](./operations/offline-sync.md).
 - Explore [editor plugin setup](./editor-integration/index.md).
+- See the [Development Guide](./development/index.md) for build, test, and contribution information.

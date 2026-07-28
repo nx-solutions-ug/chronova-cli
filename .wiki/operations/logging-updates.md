@@ -95,4 +95,4 @@ The update flow uses a minimal RAII temp directory under `std::env::temp_dir()` 
 
 - [Configuration](../configuration/index.md)
 - [Offline & Sync Behavior](./offline-sync.md)
-- [Development Guide](../development/index.md)
+- [Development Guide](../development/index.md) — includes release automation details and asset naming conventions used by the updater.

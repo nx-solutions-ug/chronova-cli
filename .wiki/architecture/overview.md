@@ -138,5 +138,5 @@ These re-exports are what `main.rs` and external consumers use. The full module 
 - [Heartbeat Flow](../heartbeat/index.md)
 - [Configuration](../configuration/index.md)
 - [Offline & Sync Behavior](../operations/offline-sync.md)
-- [Development Guide](../development/index.md)
+- [Development Guide](../development/index.md) — includes CI/automation and contribution details.
 - [Logging & Updates](../operations/logging-updates.md)
