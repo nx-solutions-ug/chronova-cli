@@ -1,28 +1,25 @@
 name: Vouch (manage)
-
-# Let maintainers vouch/denounce/unvouch by commenting on a Discussion:
-#   !vouch                 vouch the discussion author
-#   !vouch @user [reason]  vouch a specific user
-#   !denounce [@user] [reason]
-#   !unvouch [@user]
-# Only collaborators with admin/maintain/write are honored.
-
-on:
+on: 
   discussion_comment:
     types: [created]
-
 concurrency:
   group: vouch-manage
   cancel-in-progress: false
-
 permissions:
   contents: write
   discussions: write
-
+  id-token: write
 jobs:
   manage:
     runs-on: ubuntu-latest
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
       - uses: actions/checkout@v7
 
       - uses: mitchellh/vouch/action/manage-by-discussion@v1
@@ -34,4 +31,4 @@ jobs:
           unvouch-keyword: "!unvouch"
           roles: admin,maintain,write
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}

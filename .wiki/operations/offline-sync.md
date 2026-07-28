@@ -13,7 +13,7 @@ Chronova CLI is offline-first: every heartbeat is written to a local SQLite queu
 
 The queue is implemented in `src/queue.rs` using `rusqlite` with bundled SQLite. It exposes a `QueueOps` trait so the storage layer can be mocked in tests.
 
-Default queue location: `~/.chronova/queue.db` (override with `--offline-queue-file` or `--offline-queue-file-legacy`). The queue file is opened with corruption handling: if `PRAGMA integrity_check` fails, the existing database is backed up to `~/.chronova/queue.db.backup` and a fresh schema is recreated.
+Default queue location: `~/.chronova/queue.db` (override with `--offline-queue-file` or `--offline-queue-file-legacy`). The legacy queue file path is `~/.wakatime/wakatime.db`. The queue file is opened with corruption handling: if `PRAGMA integrity_check` fails, the existing database is backed up to `~/.chronova/queue.db.backup` and a fresh schema is recreated.
 
 ### Schema
 
@@ -82,7 +82,7 @@ Statuses are defined in `src/sync.rs`:
 - `retry_use_jitter`: true
 - `sync_interval_seconds`: 300 (5 minutes)
 
-These defaults can be overridden in `~/.chronova.cfg` under `[settings]` using the keys `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`.
+These defaults can be overridden in `~/.chronova.cfg` under `[settings]` using the keys `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`. The `sync_interval` value is in seconds.
 
 ## Manual sync
 
