@@ -215,7 +215,7 @@ Both `--start-line` and `--line` MUST be on the same side and MUST both exist in
 Before adding comments, fetch existing unresolved inline review threads from this bot:
 
 ```bash
-gh pr-review review view --reviewer chronova-agent --states CHANGES_REQUESTED,COMMENTED --unresolved --not_outdated -R $REPO_SLUG $ARGUMENTS
+gh pr-review review view --reviewer chronova-agent --states CHANGES_REQUESTED,COMMENTED,APPROVED --unresolved --not_outdated -R $REPO_SLUG $ARGUMENTS
 ```
 
 This returns a JSON report of reviews with their inline comment threads. For each finding you plan to post, check if an existing comment already covers the same `path` + `line` with the same concern. If so, skip it — do not post duplicates. Only post NEW findings not already raised in an unresolved thread.
