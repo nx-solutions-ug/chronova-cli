@@ -4,7 +4,7 @@ on:
   issues:
     types: [ opened ]
   pull_request:
-    types: [ opened, synchronize, ready_for_review ]
+    types: [ opened, synchronize, ready_for_review, closed ]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -293,3 +293,23 @@ jobs:
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
           omp -p --model ollama-cloud/minimax-m3 --mode json "$EXPANDED" | python3 .omp/stream-log.py
+
+  cancel-review-on-close:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    concurrency:
+      group: omp-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "PR closed — cancelling any in-progress review-pr"
+
+  cancel-label-on-close:
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    concurrency:
+      group: omp-label-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "PR closed — cancelling any in-progress label-pr"
