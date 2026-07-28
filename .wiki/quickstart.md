@@ -57,6 +57,8 @@ api_url = https://chronova.dev/api/v1
 
 Get your API key from [chronova.dev/settings](https://chronova.dev/settings). You can also read or write individual config keys with `--config-read <key>` and `--config-write <key> <value>`. Use `--config-section <section>` to target a config section other than the default `[settings]`.
 
+> Note: The default config path is `~/.chronova.cfg`, not `~/.wakatime.cfg`. The installer creates WakaTime-compatible symlinks (e.g. `~/.local/bin/wakatime-cli`) so existing editor plugins keep working, but Chronova reads its own config file.
+
 For full configuration options, see [Configuration](./configuration/index.md).
 
 ## 3. Send a heartbeat

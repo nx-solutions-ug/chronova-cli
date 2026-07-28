@@ -51,10 +51,9 @@ powershell -ExecutionPolicy Bypass -Command "& {irm https://raw.githubuserconten
 2. Detects the system architecture.
 3. Backs up any existing `~/.wakatime` folder and `~/.wakatime.cfg`.
 4. Downloads the correct release archive from GitHub releases.
-5. Installs the binary to `~/.chronova/` and creates symlinks in `~/.local/bin/`.
+5. Installs the binary to `~/.chronova/chronova-cli` and creates symlinks in `~/.local/bin/` and `~/.wakatime/` for WakaTime compatibility.
 6. Creates `~/.chronova.cfg` with default Chronova settings.
-7. Creates WakaTime-compatible symlinks so existing VSCode extensions work.
-8. Prompts for an API key.
+7. Prompts for an API key.
 
 The Windows installer also handles locked executables by staging a `.new`/`.old` rename and removes leftover `.old` files on subsequent updates.
 
@@ -85,7 +84,7 @@ cargo build --release
 
 The binary is produced at `target/release/chronova-cli`.
 
-The release profile in `Cargo.toml` enables `lto = true`, `panic = "abort"`, and `opt-level = "z"` for a compact, optimized binary. The `Cargo.toml` `repository` field is `https://github.com/chronova/chronova-cli`; release assets and installers are currently published from the `nx-solutions-ug/chronova-cli` repository.
+The release profile in `Cargo.toml` enables `lto = true`, `panic = "abort"`, and `opt-level = "z"` for a compact, optimized binary. Release assets and installers are published from the `nx-solutions-ug/chronova-cli` repository. Releases use semantic-release (configured in `.github/release-tooling/release.config.js`) with tag format `v.{version}` and branches limited to `main`.
 
 ## PATH setup
 

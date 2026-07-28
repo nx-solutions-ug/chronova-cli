@@ -25,7 +25,7 @@ The crate root is `src/lib.rs`, which declares and re-exports the public modules
 | `collector` | `src/collector.rs` | Project, git, and language detection |
 | `logger` | `src/logger.rs` | `tracing` setup with file / stdout output; default log file `~/.chronova.log` |
 | `user_agent` | `src/user_agent.rs` | User-Agent string generation |
-| `updater` | `src/updater.rs` | GitHub release lookup and self-update (uses `reqwest`, `serde`, `tokio::process::Command`) |
+| `updater` | `src/updater.rs` | GitHub release lookup and self-update (uses `reqwest`, `serde`, `tokio::process::Command`, `TempDir` shim) |
 
 ## Dependency graph
 
@@ -91,7 +91,7 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 
 `QueueOps` methods include `add`, `add_batch`, `get_pending`, `update_sync_status`, `remove`, `count_by_status`, `get_sync_stats`, `cleanup_old_entries`, `enforce_max_count`, `deduplicate`, `vacuum`, `increment_retry`, `get_retry_count`, and `count`. Override defaults in `~/.chronova.cfg` with keys such as `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`. The `sync_interval` value is in seconds.
 
-> Note: the current `HeartbeatManager` runs sync inline in `process()` rather than using the separate `ChronovaSyncManager` background task. `ChronovaSyncManager` is present in `src/sync.rs` but is not wired into the default heartbeat flow.
+> Note: `HeartbeatManager::process()` runs sync inline. The separate `ChronovaSyncManager` background task is implemented in `src/sync.rs` but is not wired into the default heartbeat flow. In addition, `HeartbeatManagerExt` (`src/heartbeat.rs`) provides `process_offline_first()`, `get_queue_stats()`, and `manual_sync()` for offline sync helpers.
 
 ### Trait-based operations
 

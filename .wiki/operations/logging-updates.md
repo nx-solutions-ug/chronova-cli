@@ -49,7 +49,7 @@ Download and install the latest version:
 chronova-cli --self-update
 ```
 
-Enable background auto-update checks by setting `auto_update = true` in `~/.chronova.cfg`.
+Enable background auto-update checks by setting `auto_update = true` in `~/.chronova.cfg`. When enabled, `main.rs` spawns a background `tokio::task` that calls `Updater::check_and_update()` and logs the result via `tracing`.
 
 ### Release conventions
 
@@ -82,6 +82,10 @@ https://github.com/nx-solutions-ug/chronova-cli/releases/download/v.1.2.0/chrono
 
 
 The update flow uses a minimal RAII temp directory under `std::env::temp_dir()` named `chronova-cli-update-{pid}-{nanos}` to hold the downloaded archive and extracted binary. The directory is removed when the update operation completes.
+
+### Build & release automation
+
+The `.github/workflows/release.yml` workflow determines the next version with semantic-release (`.github/release-tooling/release.config.js`), bumps `Cargo.toml`, builds for eight target triples (glibc/musl on Linux, Intel/Apple Silicon on macOS, x64/ARM64 on Windows), and publishes GitHub release assets. `Cross.toml` configures the local cross-compilation image for `aarch64-apple-darwin`.
 
 ## Troubleshooting
 

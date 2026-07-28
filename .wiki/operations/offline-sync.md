@@ -61,7 +61,7 @@ Statuses are defined in `src/sync.rs`:
 
 ## Sync flow
 
-`HeartbeatManager::process_queue()` drives sync:
+`HeartbeatManager::process_queue()` in `src/heartbeat.rs` drives sync:
 
 1. Open a single DB connection per loop iteration.
 2. Promote retry-eligible `Failed` entries back to `Pending` (up to 3 attempts in the heartbeat manager loop, capped by the per-entry `RetryStrategy` maximum of 5 from `SyncConfig`).
@@ -71,6 +71,8 @@ Statuses are defined in `src/sync.rs`:
 6. On transient failure, mark `Failed` and increment retry count.
 7. On permanent failure (auth, max retries reached by `HeartbeatManager`), mark `PermanentFailure`.
 8. Repeat until no pending entries remain.
+
+For manual sync, `main.rs` calls `HeartbeatManager::manual_sync()` (via the `HeartbeatManagerExt` trait) when `--sync-offline-activity` is provided. It returns a `SyncResult` with `synced_count`, `failed_count`, `total_count`, and timing metadata.
 
 ## Retry strategy
 
@@ -83,6 +85,8 @@ Statuses are defined in `src/sync.rs`:
 - `sync_interval_seconds`: 300 (5 minutes)
 
 These defaults can be overridden in `~/.chronova.cfg` under `[settings]` using the keys `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`. The `sync_interval` value is in seconds.
+
+> Note: `max_retry_attempts` is the per-entry retry cap defined by `RetryStrategy`; the heartbeat manager loop re-promotes failed entries only while their retry count is below 3.
 
 ## Manual sync
 
@@ -110,7 +114,7 @@ Read extra heartbeats from STDIN:
 echo '[{...}]' | chronova-cli --extra-heartbeats
 ```
 
-The `--extra-heartbeats` handler accepts the strict `Heartbeat` JSON shape and a relaxed WakaTime-compatible shape missing the `id` field; missing IDs are generated automatically.
+`main.rs` reads the JSON array from stdin and passes it to `HeartbeatManager` for queuing. The handler accepts the strict `Heartbeat` JSON shape and a relaxed WakaTime-compatible shape missing the `id` field; missing IDs are generated automatically.
 
 ## Failure handling
 
