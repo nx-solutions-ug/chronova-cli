@@ -36,7 +36,7 @@ gh pr-review review view --reviewer chronova-agent --unresolved --not_outdated -
 ```
 
 Then compare each unresolved thread's `path` + `line` against the current diff (Step 3):
-- If ALL unresolved threads are now resolved or the code at those lines has changed to address the findings, print `Skipped PR #$ARGUMENTS: review already posted and all findings addressed.` and stop.
+- If ALL unresolved threads are now resolved or the code at those lines has changed to address the findings, go to **Step 1b** (resolve threads and approve).
 - If some threads are still unresolved and the code hasn't changed, do NOT stop — proceed with the review. Step 6.4 will ensure you only post NEW findings not already raised in an unresolved thread. This allows the bot to re-review when the author pushes new changes that introduce new issues, while avoiding duplicate comments on unchanged lines.
 
 Also check issue-level comments from this bot (dependency summaries, general notes):
@@ -55,6 +55,44 @@ done
 ```
 
 Then continue with the review.
+
+### 1b. All findings addressed — resolve threads and approve
+
+When the bot's prior review findings have ALL been addressed at the current PR head, you MUST resolve the unresolved review threads and submit an APPROVE review. Do NOT just print "Skipped" and stop — the author needs visible confirmation that their fixes were reviewed and accepted.
+
+First, fetch ALL unresolved threads from this bot (including outdated ones, since outdated threads may still be unresolved):
+
+```bash
+UNRESOLVED_THREADS=$(gh pr-review threads list $ARGUMENTS --unresolved -R $REPO_SLUG)
+```
+
+This returns a JSON array where each element has a `threadId` field. Extract every `threadId` and resolve each thread:
+
+```bash
+THREAD_IDS=$(echo "$UNRESOLVED_THREADS" | python3 -c "import sys,json; [print(t['threadId']) for t in json.load(sys.stdin)]")
+for THREAD_ID in $THREAD_IDS; do
+  gh pr-review threads resolve $ARGUMENTS --thread-id "$THREAD_ID" -R $REPO_SLUG
+done
+```
+
+Resolve ALL unresolved threads — both outdated and non-outdated. An outdated thread that is still unresolved is one the author fixed (the code changed) but was never marked resolved; it should be resolved now.
+
+After resolving all threads, submit an APPROVE review so the PR gets a green check:
+
+```bash
+HEAD_SHA=$(gh pr view $ARGUMENTS --json headRefOid --jq .headRefOid)
+REVIEW_JSON=$(gh pr-review review --start --commit "$HEAD_SHA" -R $REPO_SLUG $ARGUMENTS)
+REVIEW_ID=$(echo "$REVIEW_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+gh pr-review review --submit --review-id "$REVIEW_ID" --event APPROVE --body "All review findings have been addressed. Threads resolved." -R $REPO_SLUG $ARGUMENTS
+```
+
+Then print:
+
+```
+Reviewed PR #$ARGUMENTS (re-review): APPROVE — all prior findings addressed, N threads resolved.
+```
+
+And stop. Do not proceed to Step 2.
 
 ## Step 2: Read the PR
 
@@ -306,6 +344,6 @@ Reviewed PR #$ARGUMENTS (<type>): <APPROVE / REQUEST_CHANGES / COMMENT> — <one
 - Deduplicate findings against existing unresolved review threads before posting (Step 6.4).
 - Use `gh pr-review` subcommands for code reviews with inline comments — NEVER use `gh pr review` for reviews that need inline comments. `gh pr review` only posts a body and cannot attach comments to diff lines.
 - Use `gh pr comment $ARGUMENTS` for dependency update tables — delete older summary comments before posting a fresh one (Step 1 handles this).
-- You MUST perform the dedup check in Step 1 before any other action. Only skip if ALL prior review findings are addressed at the current head — do NOT blanket-skip just because a review exists. Old dependency summary comments are deleted in Step 1 so a fresh one can be posted.
+- You MUST perform the dedup check in Step 1 before any other action. When all prior findings are addressed, resolve all unresolved threads and submit APPROVE (Step 1b) — do NOT just print "Skipped" and stop. Old dependency summary comments are deleted in Step 1 so a fresh one can be posted.
 - MUST resolve the repository slug before any gh api calls. Use the GH_REPO environment variable if available.
 - Every inline comment `--path` + `--line` MUST exist in the PR diff. If you are not certain a line exists in the diff, put the finding in the review `--body` instead — a body-only finding is always safe; a wrong inline line fails the `--add-comment` command.
