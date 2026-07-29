@@ -125,3 +125,4 @@ The `--extra-heartbeats` handler accepts the strict `Heartbeat` JSON shape and a
 - [API Compatibility](../api-compatibility/index.md)
 - [Configuration](../configuration/index.md)
 - [Logging & Updates](./logging-updates.md)
+- [Development Guide](../development/index.md)
