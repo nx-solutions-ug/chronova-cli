@@ -105,7 +105,7 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 
 - `api_url`: `https://chronova.dev/api/v1`
 - default `ignore_patterns`: `COMMIT_EDITMSG$`, `PULLREQ_EDITMSG$`, `MERGE_MSG$`, `TAG_EDITMSG$`
-- `disable_offline` is driven by the `offline` key (with inverted semantics: `offline = true` means offline queueing is enabled)
+- `offline` key drives queueing with inverted semantics: `offline = true` means offline queueing is enabled
 - `sync_config` defaults listed above
 
 ### Error handling

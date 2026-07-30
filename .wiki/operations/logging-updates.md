@@ -18,7 +18,7 @@ Chronova CLI uses the `tracing` ecosystem for structured logging and ships its o
 
 ### Log file location
 
-Default: `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`). The parent directory is created automatically if it does not exist. The installer may also create a symlink from `~/.chronova/chronova.log` for WakaTime compatibility.
+Default: `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`). The parent directory is created automatically if it does not exist.
 
 Override with `--log-file` or `log_file` in `~/.chronova.cfg`. Enable debug logging with `--verbose` or `debug = true` in config. `--log-to-stdout` sends logs to stdout and overrides file-based log output.
 
