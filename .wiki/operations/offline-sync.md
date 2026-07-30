@@ -13,7 +13,7 @@ Chronova CLI is offline-first: every heartbeat is written to a local SQLite queu
 
 The queue is implemented in `src/queue.rs` using `rusqlite` with bundled SQLite. It exposes a `QueueOps` trait so the storage layer can be mocked in tests.
 
-Default queue location: `~/.chronova/queue.db` (override with `--offline-queue-file` or `--offline-queue-file-legacy`). The legacy queue file path is `~/.wakatime/wakatime.db`. The queue file is opened with corruption handling: if `PRAGMA integrity_check` fails, the existing database is backed up to `~/.chronova/queue.db.backup` and a fresh schema is recreated.
+Default queue location: `~/.chronova/queue.db` (computed in `src/queue.rs::get_db_path()`). Override with `--offline-queue-file` or `--offline-queue-file-legacy`. The legacy queue file path is `~/.wakatime/wakatime.db`. The queue file is opened with corruption handling: if `PRAGMA integrity_check` fails, the existing database is backed up to `~/.chronova/queue.db.backup` and a fresh schema is recreated.
 
 ### Schema
 
@@ -64,12 +64,12 @@ Statuses are defined in `src/sync.rs`:
 `HeartbeatManager::process_queue()` drives sync:
 
 1. Open a single DB connection per loop iteration.
-2. Promote retry-eligible `Failed` entries back to `Pending` (up to 3 attempts in the heartbeat manager loop, capped by the per-entry `RetryStrategy` maximum of 5 from `SyncConfig`).
+2. Promote retry-eligible `Failed` entries back to `Pending` (capped by the `RetryStrategy` maximum of 5 from `SyncConfig`).
 3. Fetch a batch of `Pending` entries (default batch size 50).
 4. Send the batch via `AuthenticatedApiClient` when more than one heartbeat is pending; fall back to individual sends if the batch fails for a non-rate-limit reason.
 5. On success, mark `Synced` and remove the entry from the queue.
 6. On transient failure, mark `Failed` and increment retry count.
-7. On permanent failure (auth, max retries reached by `HeartbeatManager`), mark `PermanentFailure`.
+7. On permanent failure (auth, max retries reached), mark `PermanentFailure`.
 8. Repeat until no pending entries remain.
 
 ## Retry strategy
