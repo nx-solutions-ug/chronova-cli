@@ -6,7 +6,7 @@ tags: [install, linux, macos, windows, operations]
 ---
 
 <p align="center">
-  <img src="../../public/banner.png" alt="Chronova CLI — High-Performance Rust Telemetry CLI" width="850" />
+  <img src="https://raw.githubusercontent.com/nx-solutions-ug/chronova-cli/main/public/banner.png" alt="Chronova CLI — High-Performance Rust Telemetry CLI" width="850" />
 </p>
 
 # Installation

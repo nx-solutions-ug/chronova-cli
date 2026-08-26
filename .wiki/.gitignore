@@ -1,3 +1,7 @@
 /.last-updated.json
 /.last-update-report.md
 /.last-update-title.txt
+/wiki.db
+/wiki.db-journal
+/wiki.db-wal
+/wiki.db-shm
