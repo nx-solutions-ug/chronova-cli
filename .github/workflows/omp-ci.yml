@@ -255,7 +255,7 @@ jobs:
         run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
       - name: Install gh-pr-review extension
         if: steps.should-skip.outputs.skip != 'true'
-        run: gh extension install agynio/gh-pr-review --force
+        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
 
       - name: React to PR
         if: steps.should-skip.outputs.skip != 'true'

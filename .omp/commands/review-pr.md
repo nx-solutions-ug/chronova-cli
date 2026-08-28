@@ -14,7 +14,7 @@ Use $REPO_SLUG in all subsequent gh api calls instead of {owner}/{repo}.
 Ensure the `gh-pr-review` extension is installed (it provides the inline review comment workflow):
 
 ```bash
-gh extension install agynio/gh-pr-review 2>/dev/null || true
+gh extension install agynio/gh-pr-review --pin v1.6.2 2>/dev/null || true
 ```
 
 All inline review comments are posted via `gh pr-review` subcommands, NOT `gh pr review` or `gh api`. The `gh pr review` CLI command cannot attach inline comments to specific diff lines.

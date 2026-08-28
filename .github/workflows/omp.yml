@@ -53,7 +53,7 @@ jobs:
             gh api --method POST "/repos/${{ github.repository }}/issues/comments/$COMMENT_ID/reactions" -f content='eyes'
           fi
       - name: Install gh-pr-review extension
-        run: gh extension install agynio/gh-pr-review --force
+        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
       - name: Configure git for push
         run: gh auth setup-git
 
