@@ -57,15 +57,11 @@ jobs:
       - name: Configure git for push
         run: gh auth setup-git
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          no-cache: 'true'
       - name: Install OMP
         shell: bash
         run: |
-          curl -fsSL https://omp.sh/install | sh -s -- --source
-          echo "$HOME/.omp/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Authenticate OMP
         shell: bash
