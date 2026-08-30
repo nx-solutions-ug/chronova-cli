@@ -94,4 +94,4 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
         run: |
-          omp -p --model ollama-cloud/minimax-m3 --mode json "$(cat /tmp/omp-prompt.txt)" | python3 .omp/stream-log.py
+          omp -p --model ollama-cloud/glm-5.3-flash --mode json "$(cat /tmp/omp-prompt.txt)" | python3 .omp/stream-log.py

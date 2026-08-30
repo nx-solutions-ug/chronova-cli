@@ -72,7 +72,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.issue.number || github.event.inputs.issue_number }}/g' .omp/commands/triage-issue.md)
-          omp --model ollama-cloud/minimax-m3 -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp --model ollama-cloud/glm-5.3-flash -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
       - name: Dispatch fix-issue workflow
         if: always()
         shell: bash
@@ -167,7 +167,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/label-pr.md)
-          omp -p --model ollama-cloud/minimax-m3 --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp -p --model ollama-cloud/glm-5.3-flash --mode json "$EXPANDED" | python3 .omp/stream-log.py
 
   review-pr:
     if: >-
@@ -292,7 +292,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
-          omp -p --model ollama-cloud/minimax-m3 --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp -p --model ollama-cloud/glm-5.3-flash --mode json "$EXPANDED" | python3 .omp/stream-log.py
 
   cancel-review-on-close:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
