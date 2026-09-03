@@ -41,7 +41,7 @@ The code review lives in its own dedicated workflow (split out from the other OM
   - Detects Jules involvement (authored PRs, body markers, submitted reviews, suggestion comments) and passes that context to the review prompt via `IS_JULES` / `JULES_CONTEXT`.
   - Verifies a review or comment was actually posted and fails the job otherwise — except when the PR modifies `omp-code-review.yml` itself, which is skipped by design.
 
-Both jobs use `ollama-cloud/glm-5.3-flash:max` and per-PR concurrency groups with `cancel-in-progress: true`.
+Both jobs use `ollama-cloud/glm-5.3-flash:max` and share a workflow-level per-PR concurrency group with `cancel-in-progress` only for `pull_request`/`workflow_dispatch` events; review-event runs queue behind an in-flight run instead of cancelling it.
 
 ### Triage, labeling, and fixing
 
