@@ -15,7 +15,13 @@ on:
 
 concurrency:
   group: omp-code-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-  cancel-in-progress: true
+  # Never cancel an in-flight review run when the trigger is a review event —
+  # the replacement run is skipped by job conditions (review triggers are gated
+  # to Jules-authored activity), so cancelling wedges the required check at
+  # CANCELLED forever and the PR can never reach CLEAN. Only new pushes
+  # (pull_request/workflow_dispatch) may supersede an outdated review run;
+  # review-event runs queue behind the in-flight one instead.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
 
 jobs:
   # ──────────────────────────────────────────────────────
