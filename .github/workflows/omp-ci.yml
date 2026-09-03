@@ -4,11 +4,11 @@ on:
   issues:
     types: [ opened ]
   pull_request:
-    types: [ opened, synchronize, ready_for_review, closed ]
+    types: [ opened, ready_for_review, closed ]
   workflow_dispatch:
     inputs:
       pr_number:
-        description: "PR number to review (triggers review-pr job)"
+        description: "PR number to label (triggers label-pr job)"
         required: false
       issue_number:
         description: "Issue number to triage (triggers triage-issue job)"
@@ -67,7 +67,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.issue.number || github.event.inputs.issue_number }}/g' .omp/commands/triage-issue.md)
-          omp --model ollama-cloud/glm-5.3-flash -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
+          omp --model ollama-cloud/glm-5.3-flash:max -p --mode json "$EXPANDED" | python3 .omp/stream-log.py
       - name: Dispatch fix-issue workflow
         if: always()
         shell: bash
@@ -79,7 +79,7 @@ jobs:
   label-pr:
     if: >-
       github.event_name == 'pull_request' &&
-      (github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.action == 'ready_for_review')
+      (github.event.action == 'opened' || github.event.action == 'ready_for_review')
     timeout-minutes: 30
     concurrency:
       group: omp-label-${{ github.event.pull_request.number }}
@@ -157,137 +157,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/label-pr.md)
-          omp -p --model ollama-cloud/glm-5.3-flash --mode json "$EXPANDED" | python3 .omp/stream-log.py
-
-  review-pr:
-    if: >-
-      (github.event_name == 'pull_request' && github.event.action != 'closed') ||
-      (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '')
-    timeout-minutes: 30
-    concurrency:
-      group: omp-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Check if re-review is needed (synchronize only)
-        id: re-review-check
-        if: github.event.action == 'synchronize'
-        uses: actions/github-script@v9
-        with:
-          result-encoding: string
-          script: |
-            const { data: pr } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.payload.pull_request.number
-            });
-            const headSha = pr.head.sha;
-            const { data: commit } = await github.rest.repos.getCommit({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: headSha
-            });
-            const author = commit.commit.author.name || '';
-            const committer = commit.commit.committer.name || '';
-            const isAgentCommit = author.includes('opencode-agent') || committer.includes('opencode-agent')
-              || author.includes('opencode') || committer.includes('opencode')
-              || author.includes('github-actions') || committer.includes('github-actions')
-              || author.includes('omp-agent') || committer.includes('omp-agent')
-              || author.includes('chronova-agent') || committer.includes('chronova-agent');
-            return isAgentCommit ? 'false' : 'true';
-
-      - name: Determine review type
-        id: review-type
-        env:
-          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
-        run: |
-          if [[ "$PR_AUTHOR" == *"renovate"* ]] || [[ "$PR_AUTHOR" == *"dependabot"* ]]; then
-            echo "prefix=dep:" >> "$GITHUB_OUTPUT"
-          elif [[ "$PR_AUTHOR" == *"[bot]"* ]] || [[ "$PR_AUTHOR" == *"opencode-agent"* ]]; then
-            echo "prefix=bot:" >> "$GITHUB_OUTPUT"
-          else
-            echo "prefix=" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Check if should skip
-        id: should-skip
-        env:
-          ACTION: ${{ github.event.action || 'opened' }}
-          RE_REVIEW: ${{ steps.re-review-check.outputs.result || 'true' }}
-        run: |
-          skip="false"
-          if [[ "$ACTION" == "synchronize" ]] && [[ "$RE_REVIEW" == "false" ]]; then
-            skip="true"
-          fi
-          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
-
-      - name: Generate app token
-        if: steps.should-skip.outputs.skip != 'true'
-        id: app-token
-        uses: actions/create-github-app-token@v3
-        with:
-          client-id: ${{ secrets.APP_CLIENT_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-
-      - name: Authenticate gh CLI
-        if: steps.should-skip.outputs.skip != 'true'
-        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
-      - name: Install gh-pr-review extension
-        if: steps.should-skip.outputs.skip != 'true'
-        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
-
-      - name: React to PR
-        if: steps.should-skip.outputs.skip != 'true'
-        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/reactions" -f content='eyes'
-
-      - name: Install OMP
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        run: |
-          curl -fsSL https://omp.sh/install | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Authenticate OMP
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        run: |
-          omp config path > /dev/null 2>&1
-          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
-
-      - name: Populate OMP models
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        run: omp models refresh ollama-cloud > /dev/null 2>&1
-
-      - name: Review PR
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        env:
-          GH_REPO: ${{ github.repository }}
-        run: |
-          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
-          omp -p --model ollama-cloud/glm-5.3-flash --mode json "$EXPANDED" | python3 .omp/stream-log.py
-
-  cancel-review-on-close:
-    if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
-    timeout-minutes: 1
-    concurrency:
-      group: omp-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-    steps:
-      - run: echo "PR closed — cancelling any in-progress review-pr"
+          omp -p --model ollama-cloud/glm-5.3-flash:max --mode json "$EXPANDED" | python3 .omp/stream-log.py
 
   cancel-label-on-close:
     if: github.event_name == 'pull_request' && github.event.action == 'closed'

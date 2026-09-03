@@ -1,0 +1,287 @@
+name: OMP Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, review_requested]
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+
+concurrency:
+  group: omp-code-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  # ──────────────────────────────────────────────────────
+  # Dependency Bot PRs (Renovate, Dependabot)
+  # Researches changelogs and assesses breaking changes
+  # ──────────────────────────────────────────────────────
+  dependency-review:
+    if: >-
+      github.event_name == 'pull_request' &&
+      (github.event.pull_request.user.login == 'renovate[bot]' || github.event.pull_request.user.login == 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+
+      - name: Install gh-pr-review extension
+        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
+
+      - name: React to PR
+        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/reactions" -f content='eyes'
+
+      - name: Install OMP
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate OMP
+        shell: bash
+        run: |
+          omp config path > /dev/null 2>&1
+          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
+
+      - name: Populate OMP models
+        shell: bash
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
+
+      - name: Run OMP Dependency Review
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/dependency-review.md)
+          omp -p --model ollama-cloud/glm-5.3-flash:max --mode json "$EXPANDED" | python3 .omp/stream-log.py
+
+      - name: Verify a review was actually posted
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          reviews=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|omp-agent|\\[bot\\]"))] | length')
+          comments=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|omp-agent|\\[bot\\]"))] | length')
+          echo "Reviews: ${reviews}, comments: ${comments}"
+          if [ "$reviews" -eq 0 ] && [ "$comments" -eq 0 ]; then
+            echo "::error::OMP posted neither a review nor a comment on this dependency PR."
+            exit 1
+          fi
+
+  # ──────────────────────────────────────────────────────
+  # Code PRs (human-authored & agent-authored)
+  # Full code quality review with duplicate detection
+  # ──────────────────────────────────────────────────────
+  code-review:
+    if: >-
+      (
+        github.event_name == 'pull_request' &&
+        github.event.action == 'review_requested'
+      ) ||
+      (
+        github.event_name == 'pull_request' &&
+        github.event.action != 'review_requested' &&
+        github.event.pull_request.user.login != 'renovate[bot]' &&
+        github.event.pull_request.user.login != 'dependabot[bot]'
+      ) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '') ||
+      (github.event_name == 'pull_request_review' && contains(github.event.review.user.login, 'jules')) ||
+      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.user.login, 'jules'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0  # Required for git diff against base branch to prevent HTTP 406 on >300 files
+          persist-credentials: false
+
+      - name: Check if re-review is needed (synchronize only)
+        id: re-review-check
+        if: github.event.action == 'synchronize'
+        uses: actions/github-script@v9
+        with:
+          result-encoding: string
+          script: |
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number
+            });
+            const headSha = pr.head.sha;
+            const { data: commit } = await github.rest.repos.getCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: headSha
+            });
+            const author = commit.commit.author.name || '';
+            const committer = commit.commit.committer.name || '';
+            const isAgentCommit = author.includes('opencode-agent') || committer.includes('opencode-agent')
+              || author.includes('opencode') || committer.includes('opencode')
+              || author.includes('github-actions') || committer.includes('github-actions')
+              || author.includes('omp-agent') || committer.includes('omp-agent')
+              || author.includes('chronova-agent') || committer.includes('chronova-agent');
+            return isAgentCommit ? 'false' : 'true';
+
+      - name: Detect Jules involvement
+        id: jules-detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login || '' }}
+          PR_BODY: ${{ github.event.pull_request.body || '' }}
+          REVIEW_AUTHOR: ${{ github.event.review.user.login || '' }}
+          COMMENT_AUTHOR: ${{ github.event.comment.user.login || '' }}
+        run: |
+          is_jules="false"
+          jules_context=""
+
+          # Jules authored the PR (google-labs-jules[bot])
+          if [[ "$PR_AUTHOR" == *"jules"* ]]; then
+            is_jules="true"
+            jules_context="jules-authored-pr"
+          fi
+
+          # Jules created the PR on behalf of a human (body marker)
+          if [[ "$PR_BODY" == *"created automatically by Jules"* ]]; then
+            is_jules="true"
+            jules_context="jules-authored-pr"
+          fi
+
+          # Jules submitted a review
+          if [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$REVIEW_AUTHOR" == *"jules"* ]]; then
+            is_jules="true"
+            jules_context="jules-review-submitted"
+          fi
+
+          # Jules posted a review comment (suggestion)
+          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]] && [[ "$COMMENT_AUTHOR" == *"jules"* ]]; then
+            is_jules="true"
+            jules_context="jules-review-comment"
+          fi
+
+          echo "is_jules=${is_jules}" >> "$GITHUB_OUTPUT"
+          echo "jules_context=${jules_context}" >> "$GITHUB_OUTPUT"
+
+      - name: Check if should skip
+        id: should-skip
+        env:
+          ACTION: ${{ github.event.action || 'opened' }}
+          RE_REVIEW: ${{ steps.re-review-check.outputs.result || 'true' }}
+        run: |
+          skip="false"
+          # review_requested is an explicit human retrigger from the GitHub UI — never skip
+          if [[ "$ACTION" == "synchronize" ]] && [[ "$RE_REVIEW" == "false" ]]; then
+            skip="true"
+          fi
+          echo "skip=${skip}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate app token
+        if: steps.should-skip.outputs.skip != 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        if: steps.should-skip.outputs.skip != 'true'
+        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+
+      - name: Install gh-pr-review extension
+        if: steps.should-skip.outputs.skip != 'true'
+        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
+
+      - name: React to PR
+        if: steps.should-skip.outputs.skip != 'true'
+        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/reactions" -f content='eyes'
+
+      - name: Install OMP
+        if: steps.should-skip.outputs.skip != 'true'
+        shell: bash
+        run: |
+          curl -fsSL https://omp.sh/install | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Authenticate OMP
+        if: steps.should-skip.outputs.skip != 'true'
+        shell: bash
+        run: |
+          omp config path > /dev/null 2>&1
+          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
+
+      - name: Populate OMP models
+        if: steps.should-skip.outputs.skip != 'true'
+        shell: bash
+        run: omp models refresh ollama-cloud > /dev/null 2>&1
+
+      - name: Run OMP Code Review
+        if: steps.should-skip.outputs.skip != 'true'
+        shell: bash
+        env:
+          GH_REPO: ${{ github.repository }}
+          IS_JULES: ${{ steps.jules-detect.outputs.is_jules }}
+          JULES_CONTEXT: ${{ steps.jules-detect.outputs.jules_context }}
+          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || 'main' }}
+        run: |
+          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
+          omp -p --model ollama-cloud/glm-5.3-flash:max --mode json "$EXPANDED" | python3 .omp/stream-log.py
+
+      - name: Verify a review was actually posted
+        if: steps.should-skip.outputs.skip != 'true' && !cancelled()
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || 'main' }}
+        run: |
+          set -euo pipefail
+          if ! git diff --quiet "origin/${BASE_REF}"...HEAD -- .github/workflows/omp-code-review.yml; then
+            echo "::notice::This PR modifies the review workflow itself, so review verification is skipped by design."
+            exit 0
+          fi
+          threads=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100" \
+            --jq '[.[] | select(.in_reply_to_id == null)] | length')
+          reviews=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|omp-agent|\\[bot\\]"))] | length')
+          echo "Review threads: ${threads}, agent reviews: ${reviews}"
+          if [ "$threads" -eq 0 ] && [ "$reviews" -eq 0 ]; then
+            echo "::error::OMP posted neither a review nor any comment, and the PR has no" \
+                 "existing threads that would justify staying silent. The review did not run" \
+                 "properly — do not read this as an approval."
+            exit 1
+          fi
