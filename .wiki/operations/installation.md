@@ -1,8 +1,11 @@
 ---
 type: guide
 title: Installation
-description: Platform-specific installation instructions for Chronova CLI, including installers, manual binaries, and PATH setup.
-tags: [install, linux, macos, windows, operations]
+description: Platform-specific installation instructions for Chronova CLI,
+  including installers, manual binaries, and PATH setup.
+tags: [ install, linux, macos, windows, operations ]
+last_updated: 2026-09-04T18:44:02.847Z
+updated_by: wiki-agent
 ---
 
 <p align="center">
@@ -107,7 +110,7 @@ source ~/.bashrc  # or ~/.zshrc
 chronova-cli --version
 ```
 
-Expected output resembles `chronova-cli v1.3.5`.
+Expected output resembles `chronova-cli v1.5.0`.
 
 ## Uninstall
 
