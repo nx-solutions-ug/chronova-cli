@@ -49,7 +49,7 @@ jobs:
         env:
           WIKI_OLLAMA_MODE: cloud
           WIKI_OLLAMA_API_KEY: ${{ secrets.WIKI_OLLAMA_API_KEY }}
-          WIKI_MODEL: ${{ vars.WIKI_MODEL || 'kimi-k3' }}
+          WIKI_MODEL: ${{ vars.WIKI_MODEL || 'glm-5.3-flash' }}
           GH_TOKEN: ${{ steps.token.outputs.token || secrets.GITHUB_TOKEN }}
 
       - name: Generate timestamp
