@@ -1,8 +1,11 @@
 ---
 type: architecture
 title: Architecture Overview
-description: Module responsibilities, critical data flows, and design patterns in the Chronova CLI codebase.
-tags: [architecture, modules, design, rust]
+description: Module responsibilities, critical data flows, and design patterns
+  in the Chronova CLI codebase.
+tags: [ architecture, modules, design, rust ]
+last_updated: 2026-09-10T02:28:55.262Z
+updated_by: wiki-agent
 ---
 
 # Architecture Overview
@@ -21,11 +24,11 @@ The crate root is `src/lib.rs`, which declares and re-exports the public modules
 | `heartbeat` | `src/heartbeat.rs` | Heartbeat creation, ignore rules, queue interaction |
 | `queue` | `src/queue.rs` | SQLite-based persistent queue with `QueueOps` trait |
 | `sync` | `src/sync.rs` | Sync status model, retry strategy, sync manager trait |
-| `api` | `src/api.rs` | HTTP client, auth wrappers, rate-limit handling |
+| `api` | `src/api.rs` | HTTP client (reqwest 0.13, rustls TLS), auth wrappers, rate-limit handling |
 | `collector` | `src/collector.rs` | Project, git, and language detection |
 | `logger` | `src/logger.rs` | `tracing` setup with file / stdout output; default log file `~/.chronova.log` |
 | `user_agent` | `src/user_agent.rs` | User-Agent string generation |
-| `updater` | `src/updater.rs` | GitHub release lookup and self-update (uses `reqwest`, `serde`, `tokio::process::Command`) |
+| `updater` | `src/updater.rs` | GitHub release lookup and self-update (uses `reqwest` 0.13, `serde`, `tokio::process::Command`) |
 
 ## Dependency graph
 
@@ -119,6 +122,7 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 - `tokio` runs the main async runtime.
 - All SQLite work is wrapped in `tokio::task::spawn_blocking` to avoid blocking async worker threads.
 - Shared sync-manager state uses `tokio::sync::RwLock` and atomics where needed.
+- All HTTP traffic goes through reqwest 0.13 built with `default-features = false` and the `json` + `rustls` features, so both `ApiClient` and `Updater` use the rustls TLS stack instead of the default native-tls backend.
 
 ## Public API surface
 
