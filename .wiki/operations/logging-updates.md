@@ -2,7 +2,9 @@
 type: reference
 title: Logging & Updates
 description: Structured logging setup, log file locations, and the self-update mechanism.
-tags: [logging, tracing, updates, operations]
+tags: [ logging, tracing, updates, operations ]
+last_updated: 2026-09-10T02:29:00.784Z
+updated_by: wiki-agent
 ---
 
 # Logging & Updates
@@ -78,10 +80,18 @@ https://github.com/nx-solutions-ug/chronova-cli/releases/download/v.1.2.0/chrono
 - `UnsupportedPlatform` — no asset for the current platform.
 - `Io` — filesystem / extract / rename failures.
 
-`Updater::new()` builds a `reqwest::Client` with `rustls-tls` and maps the host OS/architecture to a Rust target triple; it returns `UnsupportedPlatform` if the current platform has no mapped asset.
-
-
 The update flow uses a minimal RAII temp directory under `std::env::temp_dir()` named `chronova-cli-update-{pid}-{nanos}` to hold the downloaded archive and extracted binary. The directory is removed when the update operation completes.
+
+### HTTP client / TLS stack
+
+The crate pins reqwest to `0.13` with `default-features = false` and the `json` + `rustls` features (see `Cargo.toml`), so all HTTP traffic uses the rustls TLS stack rather than the default native-tls backend. Two clients are built from this dependency:
+
+- `Updater::new()` in `src/updater.rs` — a client pinned to a fixed User-Agent, used for release-metadata queries and asset downloads.
+- `ApiClient::new()` in `src/api.rs` — a client with a 30-second request timeout, used for all API traffic.
+
+### Platform target triples
+
+`Updater::new()` maps the host OS/architecture to a Rust target triple and returns `UpdaterError::UnsupportedPlatform` if the current platform has no mapped asset.
 
 ## Troubleshooting
 
