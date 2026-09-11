@@ -1,8 +1,11 @@
 ---
 type: guide
 title: Quickstart
-description: Install Chronova CLI, configure it, send your first heartbeat, and verify activity in the dashboard.
-tags: [quickstart, install, config, heartbeat]
+description: Install Chronova CLI, configure it, send your first heartbeat, and
+  verify activity in the dashboard.
+tags: [ quickstart, install, config, heartbeat ]
+last_updated: 2026-09-11T02:28:03.251Z
+updated_by: wiki-agent
 ---
 
 <p align="center">
@@ -101,11 +104,7 @@ Trigger an immediate sync of offline activity:
 chronova-cli --sync-offline-activity 100
 ```
 
-Force sync all queued heartbeats regardless of connectivity:
-
-```bash
-chronova-cli --sync-offline-activity 100 --force-sync
-```
+`--force-sync` may be combined with `--sync-offline-activity`; it is accepted and reported in the sync summary ("Forced sync: true") but does not alter sync behavior — the manual sync path sends queued heartbeats unconditionally.
 
 Print the User-Agent string the CLI would send to the API:
 

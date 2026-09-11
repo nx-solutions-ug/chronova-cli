@@ -3,7 +3,7 @@ type: reference
 title: Logging & Updates
 description: Structured logging setup, log file locations, and the self-update mechanism.
 tags: [ logging, tracing, updates, operations ]
-last_updated: 2026-09-10T02:29:00.784Z
+last_updated: 2026-09-11T02:27:47.200Z
 updated_by: wiki-agent
 ---
 
@@ -20,9 +20,7 @@ Chronova CLI uses the `tracing` ecosystem for structured logging and ships its o
 
 ### Log file location
 
-Default: `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`). The parent directory is created automatically if it does not exist.
-
-Override with `--log-file` or `log_file` in `~/.chronova.cfg`. Enable debug logging with `--verbose` or `debug = true` in config. `--log-to-stdout` sends logs to stdout and overrides file-based log output.
+The log file path is fixed at `~/.chronova.log` (computed in `src/logger.rs::get_log_file_path()`); the parent directory is created automatically if it does not exist. The log level is `INFO` by default and `DEBUG` when `--verbose` is passed. The `--log-file`, `--log-to-stdout` CLI flags and the `log_file` config key are declared in `src/cli.rs` / `src/config.rs` but are not currently wired into `setup_logging*` — the log destination cannot be redirected in this release.
 
 ### Output modes
 

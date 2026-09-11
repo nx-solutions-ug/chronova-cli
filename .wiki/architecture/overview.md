@@ -4,7 +4,7 @@ title: Architecture Overview
 description: Module responsibilities, critical data flows, and design patterns
   in the Chronova CLI codebase.
 tags: [ architecture, modules, design, rust ]
-last_updated: 2026-09-10T02:28:55.262Z
+last_updated: 2026-09-11T02:27:51.466Z
 updated_by: wiki-agent
 ---
 
@@ -55,10 +55,10 @@ The library crate `src/lib.rs` declares all modules and re-exports the public su
 
 ### Sync flow
 
-1. `HeartbeatManager::process_queue()` in `src/heartbeat.rs` retrieves pending heartbeats (batch size 50 by default).
-2. Retry-eligible `Failed` entries are promoted back to `Pending`.
+1. `HeartbeatManager::process_queue()` in `src/heartbeat.rs` retrieves pending heartbeats (hardcoded batch size 50).
+2. Retry-eligible `Failed` entries are promoted back to `Pending` (hardcoded retry cap of 3 attempts).
 3. Entries are sent to the API via `AuthenticatedApiClient` or `ApiClient`, first as a batch and then individually if the batch fails for a non-rate-limit reason.
-4. Successful entries are marked `Synced` and removed from the queue; failures are retried up to the configured limit.
+4. Successful entries are marked `Synced` and removed from the queue; failures are retried up to the hardcoded cap, after which they become `PermanentFailure`.
 
 ### Error flow
 
@@ -93,6 +93,8 @@ Default sync configuration (from `SyncConfig::default()` in `src/sync.rs`):
 
 
 `QueueOps` methods include `add`, `add_batch`, `get_pending`, `update_sync_status`, `remove`, `count_by_status`, `get_sync_stats`, `cleanup_old_entries`, `enforce_max_count`, `deduplicate`, `vacuum`, `increment_retry`, `get_retry_count`, and `count`. Override defaults in `~/.chronova.cfg` with keys such as `sync_enabled`, `sync_max_retries`, `sync_retry_base_delay`, `sync_retry_max_delay`, `sync_interval`, `sync_retry_use_jitter`, `sync_max_queue_size`, `sync_retention_days`, and `sync_background`. The `sync_interval` value is in seconds.
+
+Two values in the default heartbeat flow are hardcoded rather than configurable: the retry cap of 3 attempts and the batch size of 50 in `src/heartbeat.rs::process_queue()`. The `sync_*` config keys are parsed into `SyncConfig`, but `sync_interval`, `sync_background`, and the retry delay/jitter settings are only consumed by `ChronovaSyncManager`, which is not wired into the default flow.
 
 > Note: the current `HeartbeatManager` runs sync inline in `process()` rather than using the separate `ChronovaSyncManager` background task. `ChronovaSyncManager` is present in `src/sync.rs` but is not wired into the default heartbeat flow.
 
