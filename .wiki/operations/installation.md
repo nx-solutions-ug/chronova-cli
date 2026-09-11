@@ -4,7 +4,7 @@ title: Installation
 description: Platform-specific installation instructions for Chronova CLI,
   including installers, manual binaries, and PATH setup.
 tags: [ install, linux, macos, windows, operations ]
-last_updated: 2026-09-04T18:44:02.847Z
+last_updated: 2026-09-11T02:28:26.777Z
 updated_by: wiki-agent
 ---
 
@@ -52,12 +52,12 @@ powershell -ExecutionPolicy Bypass -Command "& {irm https://raw.githubuserconten
 
 1. Checks for required tools (`curl`/`wget`, `tar`/`unzip`, `sed`).
 2. Detects the system architecture.
-3. Backs up any existing `~/.wakatime` folder and `~/.wakatime.cfg`.
+3. Backs up any existing `~/.wakatime` folder and `~/.wakatime.cfg` to timestamped backup paths (e.g. `~/.wakatime-backup-YYYYMMDD_HHMMSS`).
 4. Downloads the correct release archive from GitHub releases.
-5. Installs the binary to `~/.chronova/` and creates symlinks in `~/.local/bin/`.
-6. Creates `~/.chronova.cfg` with default Chronova settings.
+5. Installs the binary to `~/.chronova/` and creates symlinks in `~/.local/bin/` (plus `~/.wakatime/wakatime-cli` and `~/.wakatime/wakatime-cli-<os>-<arch>` for editor extensions).
+6. Creates `~/.chronova.cfg` with default Chronova settings and reuses an existing API key found in `~/.wakatime.cfg` when present; config permissions are set to `600`.
 7. Creates WakaTime-compatible symlinks so existing VSCode extensions work.
-8. Prompts for an API key.
+8. Prompts for an API key (interactive terminals only).
 
 The Windows installer also handles locked executables by staging a `.new`/`.old` rename and removes leftover `.old` files on subsequent updates.
 
