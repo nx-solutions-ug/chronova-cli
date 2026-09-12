@@ -75,7 +75,28 @@ jobs:
       - name: React to PR
         run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
 
+      - name: Check if this commit was already reviewed
+        id: review-skip
+        # triage-issue and label-pr are idempotent; this job was not, so a
+        # re-run or a repeat trigger posted a second review for the same commit.
+        # Anchor on the head SHA: a new push is a new commit and does get
+        # reviewed again.
+        run: |
+          set -euo pipefail
+          head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
+          # shellcheck disable=SC2016  # $sha is a jq variable, bound via --arg
+          already=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq --arg sha "$head_sha" \
+            '[.[] | select(.user.login | test("chronova-agent|claude")) | select(.commit_id == $sha)] | length')
+          if [ "$already" -gt 0 ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Commit ${head_sha} already has an agent review — skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run dependency review
+        if: steps.review-skip.outputs.skip != 'true'
         id: claude
         uses: anthropics/claude-code-action@v1
         with:
