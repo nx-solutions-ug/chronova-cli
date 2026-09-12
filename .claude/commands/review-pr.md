@@ -53,7 +53,7 @@ Developers or PR authors often reply explaining intentional design decisions, ar
    - Inspect comments from PR authors, human reviewers, or peer agents in `thread_comments[]`.
    - Extract technical claims, rationale, or domain context provided in comments.
 2. **Ground and verify claims against project standards & codebase**:
-   - Query `AGENTS.md`, `.wiki/`, and surrounding code to verify whether the developer's claim conforms to documented project standards or intentional architecture.
+   - Query `AGENTS.md` and surrounding code to verify whether the developer's claim conforms to documented project standards or intentional architecture.
 3. **Assess the impact of developer justifications**:
    - **Sound & Justified Claims**: If the explanation provides a sound, technically valid justification (e.g. deliberate design override, documented exception, intentional API contract):
      - **Accept the justification**: Do NOT treat this pattern as a violation or re-raise it.

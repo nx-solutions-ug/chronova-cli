@@ -41,7 +41,7 @@ If you cannot find release notes, state so explicitly. Do NOT fabricate changes.
 
 ## Step 3: Assess Impact on Chronova CLI
 
-- Check project standards in `AGENTS.md` and `.wiki/` for dependency guidelines.
+- Check project standards in `AGENTS.md` for dependency guidelines.
 - Check whether version constraints in `Cargo.toml` are compatible.
 - For library updates: check if any deprecated or removed APIs are used in `src/` (scan `use` statements and call sites across `src/`), and note breaking changes per SemVer in the Rust ecosystem.
 - Note any new features or performance improvements we might leverage.
