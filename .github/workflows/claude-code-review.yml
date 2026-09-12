@@ -84,10 +84,12 @@ jobs:
         run: |
           set -euo pipefail
           head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
+          # `gh api --jq` takes a query string only — it has no --arg, so bind
+          # the SHA with real jq.
           # shellcheck disable=SC2016  # $sha is a jq variable, bound via --arg
           already=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-            --jq --arg sha "$head_sha" \
-            '[.[] | select(.user.login | test("chronova-agent|claude")) | select(.commit_id == $sha)] | length')
+            | jq --arg sha "$head_sha" \
+              '[.[] | select(.user.login | test("chronova-agent|claude")) | select(.commit_id == $sha)] | length')
           if [ "$already" -gt 0 ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Commit ${head_sha} already has an agent review — skipping."
