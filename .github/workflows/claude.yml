@@ -112,7 +112,8 @@ jobs:
             printf '%s\n' "$PROMPT" > "$PROMPT_FILE"
             # Freeform prompts get the commit/push contract appended so the agent
             # persists changes to the PR branch instead of staging and stopping.
-            if [[ "$IS_PR" == "true" ]]; then
+            # Not every repo ships the fragment.
+            if [[ "$IS_PR" == "true" && -f .claude/commands/_pr-commit-push.md ]]; then
               sed "s/__PR_NUMBER__/${TARGET_NUMBER}/g" .claude/commands/_pr-commit-push.md >> "$PROMPT_FILE"
             fi
           fi
