@@ -1,3 +1,8 @@
+---
+description: Triage a GitHub issue: classify type and priority, then set the issue fields and labels
+argument-hint: <issue-number>
+---
+
 You MUST triage issue $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
 
 ## Step 0: Resolve repository
@@ -145,7 +150,7 @@ Thanks for opening this issue. I have classified it and queued it for an automat
 
 ### What happens next
 
-1. The `omp-fix-issue` workflow will be triggered automatically.
+1. The `claude-fix-issue` workflow will be triggered automatically.
 2. It will re-read this issue, confirm it is actionable, and add the `accepted` label.
 3. It will create a `fix/issue-$ARGUMENTS` branch (or `feat/issue-$ARGUMENTS` for features/enhancements) from `main` and push it.
 4. It will implement the minimal, correct change in line with `AGENTS.md` conventions, including tests.

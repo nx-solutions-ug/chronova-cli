@@ -1,3 +1,8 @@
+---
+description: Full code review of a pull request, posting inline comments and resolving addressed threads
+argument-hint: <pr-number>
+---
+
 You MUST review PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
 
 ## Step 0: Resolve repository and install extension
@@ -24,7 +29,7 @@ All inline review comments are posted via `gh pr-review` subcommands, NOT `gh pr
 Check whether this bot has already reviewed this PR. Reviews live under the pulls API, NOT the issues API:
 
 ```bash
-gh api /repos/$REPO_SLUG/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | "\(.id) \(.state) \(.body[:80])"'
+gh api /repos/$REPO_SLUG/pulls/$ARGUMENTS/reviews --jq '.[] | select(.user.login | test("chronova-agent|claude")) | "\(.id) \(.state) \(.body[:80])"'
 ```
 
 If no prior review from this bot exists, skip to the dependency summary cleanup below and continue with the review.
@@ -62,13 +67,13 @@ Developers or PR authors often reply explaining intentional design decisions, ar
 Also check issue-level comments from this bot (dependency summaries, general notes):
 
 ```bash
-gh api /repos/$REPO_SLUG/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | "\(.id) \(.body[:80])"'
+gh api /repos/$REPO_SLUG/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|claude")) | "\(.id) \(.body[:80])"'
 ```
 
 If any comments starting with `## Dependency Update Summary` from this bot exist, delete them so a fresh summary can be posted:
 
 ```bash
-COMMENT_IDS=$(gh api /repos/$REPO_SLUG/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|omp-agent")) | select(.body | startswith("## Dependency Update Summary")) | .id')
+COMMENT_IDS=$(gh api /repos/$REPO_SLUG/issues/$ARGUMENTS/comments --jq '.[] | select(.user.login | test("chronova-agent|claude")) | select(.body | startswith("## Dependency Update Summary")) | .id')
 for id in $COMMENT_IDS; do
   gh api -X DELETE /repos/$REPO_SLUG/issues/comments/$id
 done
