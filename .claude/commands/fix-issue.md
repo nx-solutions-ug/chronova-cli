@@ -1,3 +1,8 @@
+---
+description: Implement a triaged issue on a new branch and open a pull request
+argument-hint: <issue-number>
+---
+
 You MUST fix issue $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately. You are inside an isolated Github-Runner environment usual common tools are not accessible. Use the tools that you know and are accessible to you.
 
 ## Step 0: Resolve repository, configure git, install dependencies
@@ -223,5 +228,3 @@ Where:
 - **MUST NOT** open a browser or attempt visual verification. There is no display or user session available.
 - **MUST NOT** attempt to connect to databases or external services. The CI environment is isolated.
 - **MUST** install dependencies with `npm ci` (Step 0) before running any quality gates.
-- When using `find` or `search` tools, ALWAYS pass `paths` as an array, not a string. Example: `find(paths=["src/**"])`, NOT `find(paths="src/**")`.
-- When reading large files, use the `:raw` selector or specific line ranges. Do NOT repeatedly read the same lines — if a read returns elided content, use the suggested range selector to get the missing parts.

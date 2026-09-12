@@ -1,3 +1,8 @@
+---
+description: Apply exactly one type label and one priority label to a pull request
+argument-hint: <pr-number>
+---
+
 You MUST label PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
 
 ## Step 1: Read the PR

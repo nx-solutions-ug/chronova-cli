@@ -1,0 +1,137 @@
+name: claude
+
+# On-demand agent: comment "/claude <prompt>" or "@claude <prompt>" on an issue,
+# a PR, or a PR review comment.
+# A prompt naming a project command (e.g. "/claude review-pr 42") is forwarded as
+# a slash command and resolved from .claude/commands/. Anything else is treated
+# as a freeform prompt.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+jobs:
+  agent:
+    name: Claude Agent
+    if: >-
+      !endsWith(github.event.comment.user.login, '[bot]') &&
+      (
+        contains(github.event.comment.body, ' /claude') ||
+        startsWith(github.event.comment.body, '/claude') ||
+        contains(github.event.comment.body, '@claude')
+      )
+    concurrency:
+      group: claude-agent-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      # pull_request_review_comment events carry no `issue` object, so the
+      # issue-only form resolved to an empty PR number on that path.
+      TARGET_NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        # Writes ~/.config/gh/hosts.yml, which is what authenticates `gh` inside
+        # Claude's Bash tool as well — not just the steps in this workflow.
+        run: echo "$APP_TOKEN" | gh auth login --with-token
+
+      - name: React to comment
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
+            gh api --method POST "/repos/${GH_REPO}/pulls/comments/${COMMENT_ID}/reactions" -f content='eyes'
+          else
+            gh api --method POST "/repos/${GH_REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes'
+          fi
+
+      - name: Install gh-pr-review extension
+        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
+
+      - name: Configure git for push
+        # `gh auth setup-git` supplies the push credential; the identity must be
+        # set explicitly or `git commit` fails with "unable to auto-detect email
+        # address". The name is what claude-code-review's re-review gate matches
+        # on to avoid reviewing its own commits.
+        run: |
+          gh auth setup-git
+          git config --global user.name "chronova-agent[bot]"
+          git config --global user.email "286787224+chronova-agent[bot]@users.noreply.github.com"
+
+      - name: Build prompt from comment
+        id: build-prompt
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          IS_PR: ${{ github.event.issue.pull_request != null || github.event_name == 'pull_request_review_comment' }}
+        run: |
+          set -euo pipefail
+          # Strip the trigger token. /omp and /oc stay accepted so older muscle
+          # memory and in-flight comment threads keep working.
+          PROMPT=$(printf '%s' "$COMMENT_BODY" | sed -E 's~^[[:space:]]*[@/](claude|omp|oc)[[:space:]]*~~')
+
+          # The prompt may name a project command, as "/review-pr 42" or
+          # "review-pr 42". Claude Code resolves .claude/commands/<name>.md and
+          # expands $ARGUMENTS itself, so no sed templating is needed here.
+          # A bare trigger with no instruction is a no-op, not a run.
+          if [[ -z "${PROMPT//[[:space:]]/}" ]]; then
+            echo "has_prompt=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Trigger found but no instruction followed it — nothing to do."
+            exit 0
+          fi
+
+          PROMPT_FILE="${RUNNER_TEMP}/claude-prompt.txt"
+          CMD_NAME=$(printf '%s' "$PROMPT" | sed -E 's~^/?([a-z0-9][a-z0-9-]*).*~\1~')
+          if [[ -n "$CMD_NAME" && -f ".claude/commands/${CMD_NAME}.md" ]]; then
+            CMD_ARGS=$(printf '%s' "$PROMPT" | sed -E 's~^/?[a-z0-9-]+[[:space:]]*~~')
+            printf '/%s %s\n' "$CMD_NAME" "$CMD_ARGS" > "$PROMPT_FILE"
+          else
+            printf '%s\n' "$PROMPT" > "$PROMPT_FILE"
+            # Freeform prompts get the commit/push contract appended so the agent
+            # persists changes to the PR branch instead of staging and stopping.
+            if [[ "$IS_PR" == "true" ]]; then
+              sed "s/__PR_NUMBER__/${TARGET_NUMBER}/g" .claude/commands/_pr-commit-push.md >> "$PROMPT_FILE"
+            fi
+          fi
+
+          DELIM="EOF_$(openssl rand -hex 12)"
+          {
+            echo "prompt<<${DELIM}"
+            cat "$PROMPT_FILE"
+            echo "${DELIM}"
+          } >> "$GITHUB_OUTPUT"
+          echo "has_prompt=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run Claude
+        if: steps.build-prompt.outputs.has_prompt == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          prompt: ${{ steps.build-prompt.outputs.prompt }}
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,Edit,Write,WebFetch"

@@ -1,3 +1,8 @@
+---
+description: Review a Renovate/Dependabot pull request: research changelogs and assess the impact of the update
+argument-hint: <pr-number>
+---
+
 You MUST review dependency PR $ARGUMENTS right now. Do NOT ask for more information — execute all steps immediately.
 
 ## Step 0: Resolve repository

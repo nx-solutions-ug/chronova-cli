@@ -1,0 +1,72 @@
+name: claude-fix-issue
+
+# Implements a triaged issue on a branch and opens a draft PR.
+# Dispatched by claude-ci's triage-issue job, or manually.
+# Prompt lives in .claude/commands/fix-issue.md.
+
+on:
+  repository_dispatch:
+    types: [issue-triaged]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to fix'
+        required: true
+        type: number
+
+jobs:
+  fix-issue:
+    name: Fix Issue
+    concurrency:
+      group: claude-fix-issue-${{ github.event.client_payload.issue_number || github.event.inputs.issue_number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.client_payload.issue_number || github.event.inputs.issue_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        # Writes ~/.config/gh/hosts.yml, which is what authenticates `gh` inside
+        # Claude's Bash tool as well — not just the steps in this workflow.
+        run: echo "$APP_TOKEN" | gh auth login --with-token
+
+      - name: Configure git for push
+        # `gh auth setup-git` supplies the push credential; the identity must be
+        # set explicitly or `git commit` fails with "unable to auto-detect email
+        # address". The name is what claude-code-review's re-review gate matches
+        # on to avoid reviewing its own commits.
+        run: |
+          gh auth setup-git
+          git config --global user.name "chronova-agent[bot]"
+          git config --global user.email "286787224+chronova-agent[bot]@users.noreply.github.com"
+
+      - name: Fix issue
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          prompt: "/fix-issue ${{ github.event.client_payload.issue_number || github.event.inputs.issue_number }}"
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,Edit,Write,WebFetch"

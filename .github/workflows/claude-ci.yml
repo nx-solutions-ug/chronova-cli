@@ -1,0 +1,207 @@
+name: claude-ci
+
+# Issue triage and PR labelling, driven by Claude Code.
+# Prompts live in .claude/commands/{triage-issue,label-pr}.md and are invoked as
+# slash commands — Claude Code expands $ARGUMENTS natively, so no sed templating.
+
+on:
+  issues:
+    types: [ opened ]
+  pull_request:
+    types: [ opened, ready_for_review, closed ]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to label (triggers label-pr job)"
+        required: false
+      issue_number:
+        description: "Issue number to triage (triggers triage-issue job)"
+        required: false
+
+jobs:
+  triage-issue:
+    name: Triage Issue
+    if: >-
+      github.event_name == 'issues' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.issue_number != '')
+    timeout-minutes: 15
+    concurrency:
+      group: claude-triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    env:
+      # GH_REPO is read both by the gh CLI in these steps and by the prompt's
+      # Step 0 inside the Claude session.
+      GH_REPO: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        # Writes ~/.config/gh/hosts.yml, which is what authenticates `gh` inside
+        # Claude's Bash tool as well — not just the steps in this workflow.
+        run: echo "$APP_TOKEN" | gh auth login --with-token
+
+      - name: React to issue
+        run: gh api --method POST "/repos/${GH_REPO}/issues/${ISSUE_NUMBER}/reactions" -f content='eyes'
+
+      - name: Triage issue
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # On public repos issues are opened by users without write access, and
+          # the action refuses to run for them by default — without this, triage
+          # would silently never happen. Replace "*" with a comma-separated list
+          # of logins to tighten. Note the job holds only `issues: write`.
+          allowed_non_write_users: "*"
+          prompt: "/triage-issue ${{ github.event.issue.number || github.event.inputs.issue_number }}"
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,WebFetch"
+
+      - name: Verify the issue was triaged
+        # Both review jobs verify their own output; this one must too. A run that
+        # finishes without touching the issue would otherwise be treated as a
+        # success and dispatch claude-fix-issue at an unclassified issue.
+        #
+        # `needs-triage` is deliberately not the signal: auto-manage.yml applies
+        # it to every opened issue, so it is already there before triage runs.
+        # A priority label (or a priority field value, or `accepted` — the two
+        # states the prompt's skip path recognises) only exists once triage has
+        # actually classified the issue.
+        #
+        # If this fails because `gh` is unauthenticated inside the action's
+        # subprocess isolation (which allowed_non_write_users turns on), set
+        # CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: "0" in this job's env.
+        run: |
+          set -euo pipefail
+          labels=$(gh issue view "$ISSUE_NUMBER" --json labels --jq '[.labels[].name] | join(",")')
+          priority_field=$(gh api "repos/${GH_REPO}/issues/${ISSUE_NUMBER}/issue-field-values" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            --jq '[.[] | .single_select_option.name // empty] | join(",")' 2>/dev/null || echo "")
+          echo "Labels: ${labels:-<none>} | Field values: ${priority_field:-<none>}"
+          if ! grep -qE '(^|,)(priority: (critical|high|medium|low)|accepted)(,|$)' <<<"$labels" \
+             && [ -z "$priority_field" ]; then
+            echo "::error::Issue #${ISSUE_NUMBER} has neither a priority label, a priority" \
+                 "field value, nor the accepted label after triage — the triage did not run" \
+                 "properly. Not dispatching claude-fix-issue."
+            exit 1
+          fi
+
+      - name: Dispatch fix-issue workflow
+        # Only dispatch when triage actually succeeded and verified. Dispatching
+        # after a failed triage sends claude-fix-issue at an unclassified issue.
+        if: success()
+        run: |
+          # Both -f values stay quoted: unquoted client_payload[issue_number]
+          # is a glob pattern the shell may try to expand.
+          gh api "repos/${GH_REPO}/dispatches" \
+            -f event_type='issue-triaged' \
+            -f "client_payload[issue_number]=${ISSUE_NUMBER}"
+
+  label-pr:
+    name: Label PR
+    if: >-
+      (
+        github.event_name == 'pull_request' &&
+        (github.event.action == 'opened' || github.event.action == 'ready_for_review')
+      ) ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '')
+    timeout-minutes: 15
+    concurrency:
+      # Shared with cancel-label-on-close below — that is how closing a PR
+      # cancels an in-flight labelling run for the same PR.
+      group: claude-label-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Authenticate gh CLI
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "$APP_TOKEN" | gh auth login --with-token
+
+      - name: Check if labels already applied
+        id: label-skip
+        run: |
+          set -euo pipefail
+          TYPE_LABELS="bug feature enhancement docs chore"
+          PRIORITY_LABELS="priority: critical priority: high priority: medium priority: low"
+          LABELS=$(gh pr view "$PR_NUMBER" --json labels --jq '.labels[].name')
+          has_type=false
+          has_priority=false
+          for label in $TYPE_LABELS; do
+            if echo "$LABELS" | grep -qx "$label"; then has_type=true; break; fi
+          done
+          for label in $PRIORITY_LABELS; do
+            if echo "$LABELS" | grep -qx "$label"; then has_priority=true; break; fi
+          done
+          if [[ "$has_type" == "true" && "$has_priority" == "true" ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Skipping: PR #$PR_NUMBER already has type and priority labels"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Label PR
+        if: steps.label-skip.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # Dependency-bot PRs must be labelled too, and the action blocks bot
+          # actors by default.
+          allowed_bots: "renovate[bot],dependabot[bot],chronova-agent[bot]"
+          prompt: "/label-pr ${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob"
+
+  cancel-label-on-close:
+    name: Cancel Label On Close
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    concurrency:
+      group: claude-label-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - run: echo "PR closed — cancelled any in-progress label-pr run for this PR"

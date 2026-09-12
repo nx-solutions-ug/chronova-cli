@@ -1,4 +1,9 @@
-name: OMP Code Review
+name: Claude Code Review
+
+# Two review paths, driven by Claude Code:
+#   dependency-review — Renovate/Dependabot PRs: changelog research + impact assessment
+#   code-review       — every other PR: full code quality review with inline comments
+# Prompts live in .claude/commands/{dependency-review,review-pr}.md.
 
 on:
   pull_request:
@@ -14,11 +19,11 @@ on:
         required: true
 
 concurrency:
-  group: omp-code-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+  group: claude-code-review-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
   # Never cancel an in-flight review run when the trigger is a review event —
   # the replacement run is skipped by job conditions (review triggers are gated
-  # to Jules-authored activity), so cancelling wedges the required check at
-  # CANCELLED forever and the PR can never reach CLEAN. Only new pushes
+  # to Jules-authored activity), so cancelling wedges the run at CANCELLED and
+  # the PR never reaches a clean state. Only new pushes
   # (pull_request/workflow_dispatch) may supersede an outdated review run;
   # review-event runs queue behind the in-flight one instead.
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' }}
@@ -29,21 +34,27 @@ jobs:
   # Researches changelogs and assesses breaking changes
   # ──────────────────────────────────────────────────────
   dependency-review:
+    name: Dependency Review
     if: >-
       github.event_name == 'pull_request' &&
       (github.event.pull_request.user.login == 'renovate[bot]' || github.event.pull_request.user.login == 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write
-      packages: read
+      contents: read
       pull-requests: write
       issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
 
     steps:
-      - name: Checkout repository
+      - name: Checkout PR head
         uses: actions/checkout@v7
         with:
+          # The PR's own head, so the dependency manifests Claude inspects are
+          # the updated ones rather than the base branch's.
+          ref: refs/pull/${{ github.event.pull_request.number }}/head
           fetch-depth: 1
           persist-credentials: false
 
@@ -55,60 +66,49 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Authenticate gh CLI
-        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
-
-      - name: Install gh-pr-review extension
-        run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        # Writes ~/.config/gh/hosts.yml, which is what authenticates `gh` inside
+        # Claude's Bash tool as well — not just the steps in this workflow.
+        run: echo "$APP_TOKEN" | gh auth login --with-token
 
       - name: React to PR
-        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/reactions" -f content='eyes'
+        run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
 
-      - name: Install OMP
-        shell: bash
-        run: |
-          curl -fsSL https://omp.sh/install | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Authenticate OMP
-        shell: bash
-        run: |
-          omp config path > /dev/null 2>&1
-          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
-
-      - name: Populate OMP models
-        shell: bash
-        run: omp models refresh ollama-cloud > /dev/null 2>&1
-
-      - name: Run OMP Dependency Review
-        shell: bash
-        env:
-          GH_REPO: ${{ github.repository }}
-        run: |
-          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number }}/g' .omp/commands/dependency-review.md)
-          omp -p --model ollama-cloud/glm-5.3-flash:max --mode json "$EXPANDED" | python3 .omp/stream-log.py
+      - name: Run dependency review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # This job exists precisely to review bot-authored PRs, and the action
+          # blocks bot actors by default — without this it never runs.
+          allowed_bots: "renovate[bot],dependabot[bot]"
+          prompt: "/dependency-review ${{ github.event.pull_request.number }}"
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,WebFetch,WebSearch"
 
       - name: Verify a review was actually posted
         if: ${{ !cancelled() }}
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          reviews=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-            --jq '[.[] | select(.user.login | test("chronova-agent|omp-agent|\\[bot\\]"))] | length')
-          comments=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100" \
-            --jq '[.[] | select(.user.login | test("chronova-agent|omp-agent|\\[bot\\]"))] | length')
+          reviews=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|claude|\\[bot\\]"))] | length')
+          comments=$(gh api "repos/${GH_REPO}/issues/${PR_NUMBER}/comments?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|claude|\\[bot\\]"))] | length')
           echo "Reviews: ${reviews}, comments: ${comments}"
           if [ "$reviews" -eq 0 ] && [ "$comments" -eq 0 ]; then
-            echo "::error::OMP posted neither a review nor a comment on this dependency PR."
+            echo "::error::Claude posted neither a review nor a comment on this dependency PR."
             exit 1
           fi
 
   # ──────────────────────────────────────────────────────
-  # Code PRs (human-authored & agent-authored)
-  # Full code quality review with duplicate detection
+  # Gate for code PRs — decides whether a review is needed.
+  # Split out so the review job itself carries no step-level
+  # conditions and no runner setup happens on a skip.
   # ──────────────────────────────────────────────────────
-  code-review:
+  review-gate:
+    name: Review Gate
     if: >-
       (
         github.event_name == 'pull_request' &&
@@ -124,20 +124,16 @@ jobs:
       (github.event_name == 'pull_request_review' && contains(github.event.review.user.login, 'jules')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.user.login, 'jules'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
     permissions:
-      contents: write
-      packages: read
-      pull-requests: write
-      issues: write
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.should-skip.outputs.skip }}
+      is_jules: ${{ steps.jules-detect.outputs.is_jules }}
+      jules_context: ${{ steps.jules-detect.outputs.jules_context }}
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0  # Required for git diff against base branch to prevent HTTP 406 on >300 files
-          persist-credentials: false
-
       - name: Check if re-review is needed (synchronize only)
         id: re-review-check
         if: github.event.action == 'synchronize'
@@ -158,11 +154,13 @@ jobs:
             });
             const author = commit.commit.author.name || '';
             const committer = commit.commit.committer.name || '';
-            const isAgentCommit = author.includes('opencode-agent') || committer.includes('opencode-agent')
-              || author.includes('opencode') || committer.includes('opencode')
-              || author.includes('github-actions') || committer.includes('github-actions')
-              || author.includes('omp-agent') || committer.includes('omp-agent')
-              || author.includes('chronova-agent') || committer.includes('chronova-agent');
+            const agentMarkers = [
+              'claude', 'chronova-agent', 'omp-agent',
+              'opencode-agent', 'opencode', 'github-actions',
+            ];
+            const isAgentCommit = agentMarkers.some(
+              (m) => author.includes(m) || committer.includes(m)
+            );
             return isAgentCommit ? 'false' : 'true';
 
       - name: Detect Jules involvement
@@ -204,7 +202,7 @@ jobs:
           echo "is_jules=${is_jules}" >> "$GITHUB_OUTPUT"
           echo "jules_context=${jules_context}" >> "$GITHUB_OUTPUT"
 
-      - name: Check if should skip
+      - name: Decide whether to skip
         id: should-skip
         env:
           ACTION: ${{ github.event.action || 'opened' }}
@@ -217,8 +215,42 @@ jobs:
           fi
           echo "skip=${skip}" >> "$GITHUB_OUTPUT"
 
+  # ──────────────────────────────────────────────────────
+  # Code PRs (human-authored & agent-authored)
+  # Full code quality review with duplicate detection
+  # ──────────────────────────────────────────────────────
+  code-review:
+    name: Code Review
+    needs: review-gate
+    if: needs.review-gate.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
+      BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || 'main' }}
+      # Consumed by .claude/commands/review-pr.md Step 0.5.
+      IS_JULES: ${{ needs.review-gate.outputs.is_jules }}
+      JULES_CONTEXT: ${{ needs.review-gate.outputs.jules_context }}
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v7
+        with:
+          # Explicit PR head rather than the event's default ref. On
+          # pull_request_review and pull_request_review_comment events (the
+          # Jules paths) the default checkout is the base branch, so
+          # `git diff origin/<base>...HEAD` would report no changes at all and
+          # the review would run against an empty diff.
+          ref: refs/pull/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/head
+          fetch-depth: 0  # Required for git diff against base branch to prevent HTTP 406 on >300 files
+          persist-credentials: false
+
       - name: Generate app token
-        if: steps.should-skip.outputs.skip != 'true'
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
@@ -226,67 +258,50 @@ jobs:
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Authenticate gh CLI
-        if: steps.should-skip.outputs.skip != 'true'
-        run: echo "${{ steps.app-token.outputs.token }}" | gh auth login --with-token
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: echo "$APP_TOKEN" | gh auth login --with-token
 
       - name: Install gh-pr-review extension
-        if: steps.should-skip.outputs.skip != 'true'
+        # Provides `gh pr-review`, which the prompt uses for inline review
+        # comments and GraphQL thread resolution.
         run: gh extension install agynio/gh-pr-review --pin v1.6.2 --force
 
       - name: React to PR
-        if: steps.should-skip.outputs.skip != 'true'
-        run: gh api --method POST "/repos/${{ github.repository }}/issues/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/reactions" -f content='eyes'
+        run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
 
-      - name: Install OMP
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        run: |
-          curl -fsSL https://omp.sh/install | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
-      - name: Authenticate OMP
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        run: |
-          omp config path > /dev/null 2>&1
-          sqlite3 ~/.omp/agent/agent.db "INSERT INTO auth_credentials (provider, credential_type, data) VALUES ('ollama-cloud', 'api_key', '{\"key\":\"${{ secrets.OLLAMA_API_KEY }}\"}');"
-
-      - name: Populate OMP models
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        run: omp models refresh ollama-cloud > /dev/null 2>&1
-
-      - name: Run OMP Code Review
-        if: steps.should-skip.outputs.skip != 'true'
-        shell: bash
-        env:
-          GH_REPO: ${{ github.repository }}
-          IS_JULES: ${{ steps.jules-detect.outputs.is_jules }}
-          JULES_CONTEXT: ${{ steps.jules-detect.outputs.jules_context }}
-          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || 'main' }}
-        run: |
-          EXPANDED=$(sed 's/\$ARGUMENTS/${{ github.event.pull_request.number || github.event.inputs.pr_number }}/g' .omp/commands/review-pr.md)
-          omp -p --model ollama-cloud/glm-5.3-flash:max --mode json "$EXPANDED" | python3 .omp/stream-log.py
+      - name: Run code review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ steps.app-token.outputs.token }}
+          # Jules review events and post-agent `synchronize` pushes are bot
+          # actors; without this the action blocks them and the PR is never
+          # re-reviewed.
+          allowed_bots: "renovate[bot],dependabot[bot],google-labs-jules[bot],chronova-agent[bot]"
+          # Contributors without write access on public repos would otherwise
+          # never get a review. Replace "*" with explicit logins to tighten.
+          allowed_non_write_users: "*"
+          prompt: "/review-pr ${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          claude_args: |
+            --model claude-sonnet-5
+            --allowedTools "Bash,Read,Grep,Glob,WebFetch"
 
       - name: Verify a review was actually posted
-        if: steps.should-skip.outputs.skip != 'true' && !cancelled()
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr_number }}
-          BASE_REF: ${{ github.base_ref || github.event.pull_request.base.ref || 'main' }}
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          if ! git diff --quiet "origin/${BASE_REF}"...HEAD -- .github/workflows/omp-code-review.yml; then
+          if ! git diff --quiet "origin/${BASE_REF}"...HEAD -- .github/workflows/claude-code-review.yml; then
             echo "::notice::This PR modifies the review workflow itself, so review verification is skipped by design."
             exit 0
           fi
-          threads=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100" \
+          threads=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/comments?per_page=100" \
             --jq '[.[] | select(.in_reply_to_id == null)] | length')
-          reviews=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" \
-            --jq '[.[] | select(.user.login | test("chronova-agent|omp-agent|\\[bot\\]"))] | length')
+          reviews=$(gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}/reviews?per_page=100" \
+            --jq '[.[] | select(.user.login | test("chronova-agent|claude|\\[bot\\]"))] | length')
           echo "Review threads: ${threads}, agent reviews: ${reviews}"
           if [ "$threads" -eq 0 ] && [ "$reviews" -eq 0 ]; then
-            echo "::error::OMP posted neither a review nor any comment, and the PR has no" \
+            echo "::error::Claude posted neither a review nor any comment, and the PR has no" \
                  "existing threads that would justify staying silent. The review did not run" \
                  "properly — do not read this as an approval."
             exit 1
