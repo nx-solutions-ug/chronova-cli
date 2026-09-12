@@ -1,5 +1,5 @@
 ---
-description: Triage a GitHub issue: classify type and priority, then set the issue fields and labels
+description: "Triage a GitHub issue: classify type and priority, then set the issue fields and labels"
 argument-hint: <issue-number>
 ---
 

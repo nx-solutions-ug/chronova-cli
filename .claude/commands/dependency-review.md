@@ -1,5 +1,5 @@
 ---
-description: Review a Renovate/Dependabot pull request: research changelogs and assess the impact of the update
+description: "Review a Renovate/Dependabot pull request: research changelogs and assess the impact of the update"
 argument-hint: <pr-number>
 ---
 
