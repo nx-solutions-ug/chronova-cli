@@ -76,6 +76,7 @@ jobs:
         run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
 
       - name: Run dependency review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -87,6 +88,27 @@ jobs:
           claude_args: |
             --model claude-sonnet-5
             --allowedTools "Bash,Read,Grep,Glob,WebFetch,WebSearch"
+
+      - name: Surface Claude's failure message
+        # claude-code-action hides Claude's output unless show_full_output is
+        # enabled, which would dump every tool result into the log. Print only
+        # the final result line, which is where errors like
+        # "API Error: 401 OAuth access token is invalid" appear.
+        if: failure() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$EXECUTION_FILE" ]; then
+            echo "::warning::No Claude execution log at ${EXECUTION_FILE}"
+            exit 0
+          fi
+          msg=$(jq -r '[.. | objects | select(.type? == "result") | .result // empty] | last // ""' "$EXECUTION_FILE")
+          if [ -n "$msg" ]; then
+            echo "::error::Claude reported: ${msg}"
+          else
+            echo "::warning::Claude execution log contained no result message."
+          fi
 
       - name: Verify a review was actually posted
         if: ${{ !cancelled() }}
@@ -271,6 +293,7 @@ jobs:
         run: gh api --method POST "/repos/${GH_REPO}/issues/${PR_NUMBER}/reactions" -f content='eyes'
 
       - name: Run code review
+        id: claude
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -286,6 +309,27 @@ jobs:
           claude_args: |
             --model claude-sonnet-5
             --allowedTools "Bash,Read,Grep,Glob,WebFetch"
+
+      - name: Surface Claude's failure message
+        # claude-code-action hides Claude's output unless show_full_output is
+        # enabled, which would dump every tool result into the log. Print only
+        # the final result line, which is where errors like
+        # "API Error: 401 OAuth access token is invalid" appear.
+        if: failure() && steps.claude.outputs.execution_file != ''
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        run: |
+          set -euo pipefail
+          if [ ! -f "$EXECUTION_FILE" ]; then
+            echo "::warning::No Claude execution log at ${EXECUTION_FILE}"
+            exit 0
+          fi
+          msg=$(jq -r '[.. | objects | select(.type? == "result") | .result // empty] | last // ""' "$EXECUTION_FILE")
+          if [ -n "$msg" ]; then
+            echo "::error::Claude reported: ${msg}"
+          else
+            echo "::warning::Claude execution log contained no result message."
+          fi
 
       - name: Verify a review was actually posted
         if: ${{ !cancelled() }}
