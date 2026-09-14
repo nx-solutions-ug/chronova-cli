@@ -4,6 +4,38 @@
 
 This is a Rust CLI application that tracks coding activity as a Wakatime-compatible alternative. It uses async patterns, SQLite for offline storage, and supports multiple authentication methods.
 
+## Modules
+
+`src/lib.rs` declares 11 modules; `src/main.rs` is the binary and holds only
+flag dispatch.
+
+| Module | Role |
+|---|---|
+| `cli.rs` | clap `Cli` struct; every flag and its help text |
+| `config.rs` | `~/.chronova.cfg` parsing, precedence, API key/URL |
+| `heartbeat.rs` | `Heartbeat`/`AiTelemetry` types, `HeartbeatManager`, queue flush |
+| `queue.rs` | SQLite offline queue behind the `QueueOps` trait (`queue.rs:62`) |
+| `api.rs` | `ApiClient`, auth variants, single and batch sends |
+| `sync.rs` | retry/backoff policy, connectivity monitoring, metrics |
+| `collector.rs` | project, git and language detection from a path |
+| `ai_sync.rs` | `--sync-ai-activity`: Claude Code transcript → heartbeats |
+| `updater.rs` | self-update from GitHub releases |
+| `user_agent.rs` | user-agent string assembly |
+| `logger.rs` | `tracing` setup; file and optional stdout layers |
+
+## State on Disk
+
+Every path derives from `dirs::home_dir()`, so `$HOME` fully isolates a run —
+useful for testing against real data without touching live state.
+
+| Path | Written by |
+|---|---|
+| `~/.chronova.cfg` | user/config; `--config` overrides (`cli.rs:54`) |
+| `~/.chronova.log` | `logger.rs:90` |
+| `~/.chronova/queue.db` | `queue.rs:716` (WAL mode) |
+| `~/.chronova-internal.cfg` | `ai_sync.rs:277` — `[internal] ai_logs_last_parsed_at` |
+| `~/.chronova/ai-sync.lock` | `ai_sync.rs:271` — advisory lock, released on drop |
+
 ## When Working on This Codebase
 
 ### Error Handling
@@ -24,8 +56,11 @@ This is a Rust CLI application that tracks coding activity as a Wakatime-compati
 
 ### Configuration
 - Respect config precedence: CLI > file > defaults
-- Use `shellexpand` for path expansion
 - Validate early, fail fast
+- There is no `shellexpand` dependency. Paths are resolved with
+  `dirs::home_dir()`, and `~` expansion in `config.rs:187` only matches the
+  exact strings `~/.chronova.cfg` and `.chronova.cfg` — a `~` anywhere else in
+  a config value is **not** expanded.
 
 ### API Compatibility
 - Maintain Wakatime-compatible endpoints
@@ -36,13 +71,23 @@ This is a Rust CLI application that tracks coding activity as a Wakatime-compati
 - Add unit tests for new functions
 - Use `tempfile` for test isolation
 - Mock API calls with wiremock for integration tests
+- To exercise a whole command against real data without touching live state,
+  run it under a throwaway `$HOME` (see State on Disk) and point `api_url` at
+  an unroutable address to test the failure path, or at a local mock to test
+  the success path. Every config, queue, log and state file follows `$HOME`.
 
 ## Common Tasks
 
 ### Adding a New CLI Flag
 1. Add to `Cli` struct in `cli.rs` with appropriate attributes
-2. Handle in `main.rs` match arms
-3. Document in help text
+2. Handle in `main.rs`. Dispatch is a sequence of ~17 `if cli.<flag>` guards
+   that each `return`/`process::exit` — not `match` arms
+3. Document in help text. The clap doc comment *is* the help text
+
+If the flag must work without `--entity`, handle it **before** the guard at
+`main.rs:295` (`cli.entity.is_none() && cli.sync_offline_activity.is_none()`),
+which prints an error and exits. `--sync-ai-activity` sits directly above it
+for that reason.
 
 ### Adding a New Config Option
 1. Add field to appropriate config struct in `config.rs`
@@ -50,16 +95,46 @@ This is a Rust CLI application that tracks coding activity as a Wakatime-compati
 3. Update config parsing logic
 
 ### Adding a New Heartbeat Field
-1. Update `Heartbeat` struct in `heartbeat.rs`
-2. Update database schema in `queue.rs`
-3. Add migration if needed
-4. Update serialization
+1. Update `Heartbeat` struct in `heartbeat.rs:16`
+2. Mark it `#[serde(default, skip_serializing_if = "Option::is_none")]`
+3. Update every struct literal — `ast-grep` finds them all, including
+   fully-qualified ones (see Structural code search below)
+
+**No database migration is needed.** The queue table is
+`heartbeats(id, data, created_at, retry_count, last_attempt)` at
+`queue.rs:518` — the heartbeat is one serialised JSON blob in `data`, not a
+column per field. `#[serde(default)]` is what keeps rows queued by an older
+build readable; without it they fail to deserialize on the next sync.
+`apply_migration_v1` (`queue.rs:573`) exists for the queue's own bookkeeping
+columns (`sync_status`, `sync_metadata`), not for heartbeat fields.
+
+`AiTelemetry` (`heartbeat.rs:60`) shows the pattern: a grouped struct held as
+one `#[serde(default, flatten)]` field, so it serialises flat into the API
+payload while costing each literal a single line.
 
 ### Adding API Endpoints
 1. Add method to `ApiClient` in `api.rs`
 2. Handle all auth methods
 3. Add proper error handling
 4. Add retry logic if needed
+
+## Landmines
+
+Two behaviours that are easy to trip over and hard to notice:
+
+- **`HeartbeatManager::new()` empties the queue.** It calls
+  `queue.cleanup_old_entries(0)` (`heartbeat.rs:123`), and `max_age_days == 0`
+  is the special case that runs `DELETE FROM heartbeats` (`queue.rs:314-317`).
+  So constructing a manager discards every pending heartbeat. Use
+  `HeartbeatManager::new_with_queue` (`heartbeat.rs:136`) when the queue must
+  survive, and do not treat the queue as durable storage across invocations.
+
+- **`tracing` at INFO goes to stdout, not just the log file.** `setup_logging`
+  adds a stdout layer in normal mode (`logger.rs:63-65`) and the default level
+  is INFO (`logger.rs:36`). For any flag whose caller parses or error-checks
+  output, use `setup_logging_with_output_format(verbose, true)`, which keeps
+  file logging and drops the stdout layer. `--sync-ai-activity` does this
+  because the invoking plugin logs any output as an error.
 
 ## Code Style
 
@@ -74,6 +149,12 @@ This is a Rust CLI application that tracks coding activity as a Wakatime-compati
 1. **Heartbeat Flow:** CLI parse → Config load → Heartbeat create → Queue → API send
 2. **Sync Flow:** Queue::process_queue → batch/individual → API → status update
 3. **Error Flow:** Any error → tracing log → propagate up → user message
+4. **AI Sync Flow** (`ai_sync.rs:65`): acquire lock → load `ai_logs_last_parsed_at`
+   → walk `~/.claude/projects/**/*.jsonl` by mtime → parse each line's
+   `toolUseResult` → build file + app heartbeats → enqueue → flush → advance the
+   cutoff. On a total send failure the batch is removed again and the cutoff
+   held, so the next run re-derives it from the transcripts, which are the real
+   durable store (see Landmines).
 
 ## Dependencies to Know
 
@@ -84,6 +165,12 @@ This is a Rust CLI application that tracks coding activity as a Wakatime-compati
 - `rusqlite` - SQLite bindings
 - `anyhow`/`thiserror` - Error handling
 - `tracing` - Structured logging
+- `configparser` - INI parsing for `~/.chronova.cfg` and the internal state file
+- `dirs` - home-directory resolution for every on-disk path
+- `chrono` - timestamps; RFC 3339 for the AI sync cutoff
+- `uuid` - client-side heartbeat ids
+- `git2` - branch/commit detection in `collector.rs`
+- `gethostname` - the `machine` field
 
 ## Testing Checklist
 
@@ -94,3 +181,52 @@ Before submitting changes:
 - [ ] Formatted: `cargo fmt`
 - [ ] No compiler warnings
 - [ ] Manual test of changed functionality
+
+## Structural code search (ast-grep)
+
+Use `ast-grep` — not `grep`/`rg` — for anything **structural**: finding call
+sites, function/class/JSX shapes, or code matching a pattern rather than a
+string. Use it for **every multi-file rewrite**. Text search also hits
+comments, strings and unrelated identifiers; ast-grep matches AST nodes.
+
+Fall back to `rg` only for literal text, non-code files (Markdown, JSON, lock
+files), or languages ast-grep cannot parse.
+
+```bash
+# Search — single-node patterns. Always single-quote: "$A" is shell-expanded.
+ast-grep run -p 'console.log($ARG)' -l ts src/
+ast-grep run -p 'useEffect($CB, $DEPS)' -l tsx --json src/ | jq -r '.[].file'
+
+# Search — relational / composite queries
+ast-grep scan --inline-rules 'id: await-in-loop
+language: TypeScript
+rule:
+  kind: for_in_statement
+  has:
+    pattern: await $E
+    stopBy: end' src/
+
+# Rewrite — prints a diff by default; -i reviews each edit, -U applies all
+ast-grep run -p 'var $N = $V' -r 'let $N = $V' -l ts -i src/
+```
+
+Non-obvious rules, in the order they bite:
+
+- Invoke it as `ast-grep`, never the `sg` alias — `sg` collides with
+  shadow-utils' setgid tool on Linux.
+- **Single-quote patterns.** `"$PROP && $PROP()"` reaches ast-grep as `" && ()"`
+  after shell expansion.
+- In relational rules (`has`, `inside`, `precedes`, `follows`) set
+  `stopBy: end`, or the search stops at the first non-matching node.
+- **Write inline rules in block YAML, not flow maps.** `has: { pattern: f() { $$$B }, stopBy: end }`
+  fails to parse — the pattern's `}` closes the flow mapping. Indented keys
+  always work.
+- **Zero matches ≠ code absent.** Patterns match whole AST nodes, so
+  `-p 'log($MSG)'` does _not_ match `console.log("hello")`. Before concluding
+  something isn't there, inspect the parse: `--debug-query=pattern` shows how
+  ast-grep read your pattern, `--debug-query=ast` shows the named nodes.
+- `--inline-rules` works in any directory; bare `ast-grep scan` (project rule
+  dirs) requires an `sgconfig.yml` at the repo root.
+- Not on `PATH` — CI runners included: `bun add -g @ast-grep/cli`.
+
+Full reference: <https://ast-grep.github.io/llms-full.txt>
