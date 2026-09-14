@@ -208,5 +208,6 @@ fn create_test_heartbeat(id: &str) -> chronova_cli::heartbeat::Heartbeat {
         commit_message: None,
         repository_url: None,
         dependencies: Vec::new(),
+        ai: Default::default(),
     }
 }

@@ -262,6 +262,35 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle Claude Code AI activity sync. Must run before the --entity guard
+    // below, because the plugin invokes this flag with no entity.
+    if cli.sync_ai_activity {
+        // File-only logging: the calling plugin treats anything this process
+        // writes to stdout/stderr as an error, so a successful run stays silent.
+        let _guard = chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
+            .unwrap_or_else(|e| {
+                eprintln!("Failed to setup logging: {}", e);
+                process::exit(1);
+            });
+
+        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+            eprintln!("Failed to load configuration: {}", e);
+            process::exit(1);
+        });
+
+        match chronova_cli::ai_sync::sync_ai_activity(&cli, config).await {
+            Ok(count) => {
+                tracing::info!("ai activity sync produced {} heartbeat(s)", count);
+            }
+            Err(e) => {
+                tracing::error!("ai activity sync failed: {}", e);
+                eprintln!("Error syncing AI activity: {}", e);
+                process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     // Entity is required for actual heartbeat processing (unless syncing offline activity)
     if cli.entity.is_none() && cli.sync_offline_activity.is_none() {
         eprintln!("Error: --entity argument is required");
@@ -653,6 +682,7 @@ async fn process_extra_heartbeats(
                     commit_message: None,
                     repository_url: None,
                     dependencies: relaxed.dependencies,
+                    ai: Default::default(),
                 };
                 heartbeats.push(heartbeat);
             }

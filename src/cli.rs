@@ -234,6 +234,10 @@ pub struct Cli {
     #[arg(long)]
     pub today_hide_categories: bool,
 
+    /// Parse Claude Code session transcripts for AI coding activity and sync the resulting heartbeats, then exit.
+    #[arg(long)]
+    pub sync_ai_activity: bool,
+
     /// (internal) Prints the wakatime-cli useragent, as it will be sent to the api, then exits.
     #[arg(long)]
     pub user_agent: bool,

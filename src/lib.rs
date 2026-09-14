@@ -2,6 +2,7 @@
 //!
 //! A high-performance, drop-in replacement for wakatime-cli written in Rust.
 
+pub mod ai_sync;
 pub mod api;
 pub mod cli;
 pub mod collector;

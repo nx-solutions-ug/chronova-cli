@@ -1030,6 +1030,7 @@ mod tests {
             commit_message: None,
             repository_url: None,
             dependencies: Vec::new(),
+            ai: Default::default(),
         }
     }
 

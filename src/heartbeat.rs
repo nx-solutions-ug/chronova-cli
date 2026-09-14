@@ -42,6 +42,50 @@ pub struct Heartbeat {
     pub repository_url: Option<String>,
 
     pub dependencies: Vec<String>,
+
+    /// AI telemetry, flattened into the payload so it matches the field names
+    /// the Chronova API expects. `default` keeps heartbeats that were queued
+    /// by an older build (whose JSON lacks these keys) deserializable.
+    #[serde(default, flatten)]
+    pub ai: AiTelemetry,
+}
+
+/// Optional AI-assistance telemetry attached to a heartbeat.
+///
+/// Field names mirror the Chronova API's heartbeat schema rather than
+/// wakatime-cli's internal `ai_line_changes`/`ai_tokens` naming, because the
+/// server is what ultimately validates them. Every line count is required by
+/// the API to be non-negative, so callers must clamp before populating.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AiTelemetry {
+    /// Which assistant produced the activity, e.g. `claude-code`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_agent: Option<String>,
+
+    /// What the assistant did, e.g. `edit`, `create`, `prompt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_action: Option<String>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_prompt_tokens: Option<i64>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_completion_tokens: Option<i64>,
+
+    /// Magnitude of the change the assistant proposed, in lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_lines_suggested: Option<i32>,
+
+    /// Net lines the assistant added, in lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_lines_accepted: Option<i32>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_lines_rejected: Option<i32>,
+
+    /// Marks the heartbeat as AI-generated for the server's analytics split.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_ai_agent: Option<bool>,
 }
 
 pub struct HeartbeatManager {
@@ -206,6 +250,7 @@ impl HeartbeatManager {
                 git_info.as_ref().and_then(|g| g.repository_url.clone())
             },
             dependencies: Vec::new(),
+            ai: Default::default(),
         })
     }
 
@@ -752,6 +797,7 @@ mod tests {
             commit_message: None,
             repository_url: None,
             dependencies: Vec::new(),
+            ai: Default::default(),
         };
 
         let hb2 = Heartbeat {
@@ -776,6 +822,7 @@ mod tests {
             commit_message: None,
             repository_url: None,
             dependencies: Vec::new(),
+            ai: Default::default(),
         };
 
         // Add heartbeats directly to the manager's queue
@@ -792,5 +839,89 @@ mod tests {
             sync.synced_count, 2,
             "Both queued heartbeats should be synced"
         );
+    }
+}
+
+#[cfg(test)]
+mod ai_telemetry_tests {
+    use super::*;
+
+    fn base_json() -> serde_json::Value {
+        serde_json::json!({
+            "id": "abc",
+            "entity": "/proj/src/main.rs",
+            "type": "file",
+            "time": 1_757_000_000.0,
+            "project": "proj",
+            "branch": null,
+            "language": "Rust",
+            "is_write": true,
+            "lines": null,
+            "lineno": null,
+            "cursorpos": null,
+            "user_agent": "ua",
+            "category": "ai coding",
+            "machine": "host",
+            "editor": null,
+            "operating_system": null,
+            "commit_hash": null,
+            "commit_author": null,
+            "commit_message": null,
+            "repository_url": null,
+            "dependencies": []
+        })
+    }
+
+    #[test]
+    fn a_heartbeat_queued_before_ai_fields_existed_still_deserializes() {
+        let heartbeat: Heartbeat = serde_json::from_value(base_json())
+            .expect("legacy queue rows must remain readable after the schema grew");
+        assert_eq!(heartbeat.ai, AiTelemetry::default());
+    }
+
+    #[test]
+    fn ai_fields_serialize_flat_and_omit_empties() {
+        let mut heartbeat: Heartbeat = serde_json::from_value(base_json()).unwrap();
+        heartbeat.ai = AiTelemetry {
+            ai_agent: Some("claude-code".to_string()),
+            ai_action: Some("edit".to_string()),
+            ai_prompt_tokens: Some(120),
+            ai_completion_tokens: None,
+            ai_lines_suggested: Some(18),
+            ai_lines_accepted: Some(0),
+            ai_lines_rejected: None,
+            is_ai_agent: Some(true),
+        };
+
+        let value = serde_json::to_value(&heartbeat).unwrap();
+        let map = value.as_object().unwrap();
+
+        assert_eq!(map.get("ai_agent").unwrap(), "claude-code");
+        assert_eq!(map.get("ai_prompt_tokens").unwrap(), 120);
+        assert_eq!(map.get("ai_lines_accepted").unwrap(), 0);
+        assert_eq!(map.get("is_ai_agent").unwrap(), true);
+        assert!(
+            map.get("ai").is_none(),
+            "the telemetry must be flattened, not nested under `ai`"
+        );
+        assert!(
+            !map.contains_key("ai_completion_tokens"),
+            "unset AI fields must be omitted rather than sent as null"
+        );
+        assert!(!map.contains_key("ai_lines_rejected"));
+    }
+
+    #[test]
+    fn ai_fields_round_trip_through_the_queues_json_blob() {
+        let mut heartbeat: Heartbeat = serde_json::from_value(base_json()).unwrap();
+        heartbeat.ai.ai_lines_suggested = Some(7);
+        heartbeat.ai.is_ai_agent = Some(true);
+
+        let encoded = serde_json::to_string(&heartbeat).unwrap();
+        let decoded: Heartbeat = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.ai.ai_lines_suggested, Some(7));
+        assert_eq!(decoded.ai.is_ai_agent, Some(true));
+        assert_eq!(decoded.category.as_deref(), Some("ai coding"));
     }
 }
