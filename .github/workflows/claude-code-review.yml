@@ -309,11 +309,10 @@ jobs:
       # property. Cargo resolves the checked-out PR's own manifest, and this
       # workflow triggers on `pull_request_review` and
       # `pull_request_review_comment`, which carry the repository's secrets
-      # regardless of where the PR came from — the gate for those paths only
-      # asks whether the reviewer's login contains `jules`, which anyone can
-      # arrange for their own PR. Fetching first means no privileged token is
-      # sitting in the runner's gh config while PR-controlled build files are
-      # processed.
+      # regardless of where the PR came from — those paths check out the fork's
+      # own head even when the reviewer genuinely is Jules, which the gate
+      # below requires. Fetching first means no privileged token is sitting in
+      # the runner's gh config while PR-controlled build files are processed.
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
