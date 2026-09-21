@@ -420,6 +420,23 @@ struct StructuredPatch {
     old_lines: i32,
 }
 
+fn lenient_paths<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                serde_json::Value::String(path) => Some(path),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
 /// One file a shell command changed, as Claude Code reports it in
 /// `bashEditDiff`. The hunks carry the same shape as `structuredPatch`.
 #[derive(Debug, Deserialize)]
@@ -432,6 +449,14 @@ struct BashEditFile {
 
 #[derive(Debug, Deserialize)]
 struct BashEditDiff {
+    /// Every path the command changed. `files` is only the subset Claude Code
+    /// attached a diff to, and it is capped — `moreFiles` counts the rest.
+    ///
+    /// Read leniently on purpose: a shape this does not recognise yields an
+    /// empty list and the caller falls back to `files`, rather than failing the
+    /// whole result and losing the heartbeat with it.
+    #[serde(default, rename = "changedFiles", deserialize_with = "lenient_paths")]
+    changed_files: Vec<String>,
     #[serde(default)]
     files: Vec<BashEditFile>,
 }
@@ -906,15 +931,30 @@ fn bash_edit_records(
     let mut records = Vec::new();
     let mut remaining = tokens;
 
-    for file in &diff.files {
-        let Some(path) = file.file_path.as_deref() else {
-            continue;
-        };
+    // `changedFiles` is the authoritative list; `files` only carries the diffs
+    // for as many as Claude Code chose to attach. Falling back to `files` keeps
+    // a result that names no `changedFiles` from being dropped entirely.
+    let mut paths: Vec<&str> = diff.changed_files.iter().map(String::as_str).collect();
+    if paths.is_empty() {
+        paths = diff
+            .files
+            .iter()
+            .filter_map(|f| f.file_path.as_deref())
+            .collect();
+    }
+
+    for path in paths {
         if path.is_empty() || is_task_output_path(path) {
             continue;
         }
 
-        let line_changes: i32 = file.hunks.iter().map(|h| h.new_lines - h.old_lines).sum();
+        let line_changes: i32 = diff
+            .files
+            .iter()
+            .filter(|f| f.file_path.as_deref() == Some(path))
+            .flat_map(|f| f.hunks.iter())
+            .map(|h| h.new_lines - h.old_lines)
+            .sum();
         let (prompt_tokens, completion_tokens) =
             remaining.take().map(|t| t.delta()).unwrap_or((0, 0));
 
@@ -1598,7 +1638,7 @@ mod tests {
             &dir,
             "sess-bash.jsonl",
             &[
-                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"done","bashEditDiff":{"changedFiles":2,"moreFiles":0,"files":[{"filePath":"/proj/src/a.ts","hunks":[{"oldStart":1,"oldLines":4,"newStart":1,"newLines":9}]},{"filePath":"/proj/docs/b.md","hunks":[{"oldStart":1,"oldLines":10,"newStart":1,"newLines":7}]}]}}}"#,
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"done","bashEditDiff":{"changedFiles":["/proj/src/a.ts","/proj/docs/b.md"],"moreFiles":0,"files":[{"filePath":"/proj/src/a.ts","hunks":[{"oldStart":1,"oldLines":4,"newStart":1,"newLines":9}]},{"filePath":"/proj/docs/b.md","hunks":[{"oldStart":1,"oldLines":10,"newStart":1,"newLines":7}]}]}}}"#,
             ],
         );
 
@@ -1613,6 +1653,66 @@ mod tests {
         let b = find(&records, "/proj/docs/b.md").expect("md record");
         assert_eq!(b.entity_type, "file");
         assert_eq!(b.line_changes, -3);
+    }
+
+    #[test]
+    fn a_shell_command_records_every_changed_file_not_only_the_diffed_ones() {
+        let dir = TempDir::new().unwrap();
+        let path = write_transcript(
+            &dir,
+            "sess-more.jsonl",
+            &[
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"ok","bashEditDiff":{"changedFiles":["/proj/src/a.ts","/proj/src/b.ts","/proj/docs/c.md"],"moreFiles":2,"files":[{"filePath":"/proj/src/a.ts","hunks":[{"oldStart":1,"oldLines":2,"newStart":1,"newLines":5}]}]}}}"#,
+            ],
+        );
+
+        let records = parse_transcript(&path, epoch()).unwrap();
+
+        let diffed = find(&records, "/proj/src/a.ts").expect("the diffed file");
+        assert_eq!(diffed.line_changes, 3);
+
+        for undiffed in ["/proj/src/b.ts", "/proj/docs/c.md"] {
+            let r = find(&records, undiffed).expect("a file with no attached diff");
+            assert_eq!(r.entity_type, "file");
+            assert!(r.is_write);
+            assert_eq!(
+                r.line_changes, 0,
+                "no hunks means no line count, not no record"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shell_result_without_changed_files_still_uses_the_diffed_ones() {
+        let dir = TempDir::new().unwrap();
+        let path = write_transcript(
+            &dir,
+            "sess-fallback.jsonl",
+            &[
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"ok","bashEditDiff":{"moreFiles":0,"files":[{"filePath":"/proj/src/only.ts","hunks":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":4}]}]}}}"#,
+            ],
+        );
+
+        let records = parse_transcript(&path, epoch()).unwrap();
+        let r = find(&records, "/proj/src/only.ts").expect("fallback to files[]");
+        assert_eq!(r.line_changes, 3);
+    }
+
+    #[test]
+    fn an_unrecognised_changed_files_shape_degrades_to_the_diffed_files() {
+        let dir = TempDir::new().unwrap();
+        let path = write_transcript(
+            &dir,
+            "sess-shape.jsonl",
+            &[
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"ok","bashEditDiff":{"changedFiles":7,"moreFiles":0,"files":[{"filePath":"/proj/src/kept.ts","hunks":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":3}]}]}}}"#,
+            ],
+        );
+
+        let records = parse_transcript(&path, epoch()).unwrap();
+        let r = find(&records, "/proj/src/kept.ts")
+            .expect("a shape we cannot read must not cost the whole result");
+        assert_eq!(r.line_changes, 2);
     }
 
     #[test]
@@ -1640,7 +1740,7 @@ mod tests {
             &dir,
             "sess-artifact.jsonl",
             &[
-                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"x","bashEditDiff":{"changedFiles":2,"moreFiles":0,"files":[{"filePath":"/tmp/claude-1000/sess/tasks/run.output","hunks":[{"oldStart":1,"oldLines":0,"newStart":1,"newLines":40}]},{"filePath":"/proj/src/real.ts","hunks":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":2}]}]}}}"#,
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"x","bashEditDiff":{"changedFiles":["/tmp/claude-1000/sess/tasks/run.output","/proj/src/real.ts"],"moreFiles":0,"files":[{"filePath":"/tmp/claude-1000/sess/tasks/run.output","hunks":[{"oldStart":1,"oldLines":0,"newStart":1,"newLines":40}]},{"filePath":"/proj/src/real.ts","hunks":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":2}]}]}}}"#,
             ],
         );
 
