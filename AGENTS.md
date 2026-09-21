@@ -248,8 +248,10 @@ Tool permissions for those runs are declared centrally per job via
 `claude_args: --allowedTools ...` in the workflow — deliberately not in command
 frontmatter, so there is one place to look.
 
-`gh label create` is not idempotent: it exits 422 when the label already
-exists. Always append `|| true`.
+`gh label create` exits 422 when the label already exists. Always pass
+`--force`: it upserts the label, updating colour and description in place,
+and unlike `|| true` it still surfaces a real failure such as a bad token,
+a rate limit, or the wrong repository.
 
 ## Releases and versioning
 

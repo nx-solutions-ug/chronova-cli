@@ -56,21 +56,21 @@ Skipped issue #$ARGUMENTS: already has type + priority fields, or is accepted.
 
 ## Step 3: Ensure label taxonomy exists
 
-Run `gh label create` for any labels that do not yet exist. Ignore `422` errors:
+Run `gh label create ... --force` for the whole taxonomy. `--force` upserts, so an existing label is updated in place instead of exiting 422 — and unlike `|| true`, a real failure (bad token, rate limit, wrong repository) still surfaces:
 
 ```bash
-gh label create bug --color d73a4a --description "Something isn't working" || true
-gh label create feature --color a2eeef --description "New feature or request" || true
-gh label create enhancement --color 84b6eb --description "Improvement to an existing feature" || true
-gh label create docs --color 0075ca --description "Improvements or additions to documentation" || true
-gh label create chore --color fef2c0 --description "Maintenance, infra, or tooling" || true
-gh label create "priority: critical" --color e11d48 --description "Production down or security vulnerability" || true
-gh label create "priority: high" --color fb923c --description "Major impact, common workflow broken" || true
-gh label create "priority: medium" --color fbbf24 --description "Normal priority, workaround exists" || true
-gh label create "priority: low" --color 22c55e --description "Edge case or minor impact" || true
-gh label create needs-triage --color 7c8f80 --description "Awaiting initial classification" || true
-gh label create needs-info --color d876e3 --description "Needs more information from the reporter" || true
-gh label create accepted --color 0e8a16 --description "Accepted by maintainers" || true
+gh label create bug --color d73a4a --description "Something isn't working" --force
+gh label create feature --color a2eeef --description "New feature or request" --force
+gh label create enhancement --color 84b6eb --description "Improvement to an existing feature" --force
+gh label create docs --color 0075ca --description "Improvements or additions to documentation" --force
+gh label create chore --color fef2c0 --description "Maintenance, infra, or tooling" --force
+gh label create "priority: critical" --color e11d48 --description "Production down or security vulnerability" --force
+gh label create "priority: high" --color fb923c --description "Major impact, common workflow broken" --force
+gh label create "priority: medium" --color fbbf24 --description "Normal priority, workaround exists" --force
+gh label create "priority: low" --color 22c55e --description "Edge case or minor impact" --force
+gh label create needs-triage --color 7c8f80 --description "Awaiting initial classification" --force
+gh label create needs-info --color d876e3 --description "Needs more information from the reporter" --force
+gh label create accepted --color 0e8a16 --description "Accepted by maintainers" --force
 ```
 
 ## Step 4: Classify the issue

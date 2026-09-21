@@ -28,18 +28,18 @@ Skipped PR #$ARGUMENTS: already has type and priority labels.
 
 ## Step 4: Ensure label taxonomy exists
 
-Run `gh label create` for any labels that do not yet exist in the repository. Ignore `422` errors (label already exists):
+Run `gh label create ... --force` for the whole taxonomy. `--force` upserts, so an existing label is updated in place instead of exiting 422 — and unlike `|| true`, a real failure (bad token, rate limit, wrong repository) still surfaces:
 
 ```bash
-gh label create bug --color d73a4a --description "Something isn't working" || true
-gh label create feature --color a2eeef --description "New feature or request" || true
-gh label create enhancement --color 84b6eb --description "Improvement to an existing feature" || true
-gh label create docs --color 0075ca --description "Improvements or additions to documentation" || true
-gh label create chore --color fef2c0 --description "Maintenance, infra, or tooling" || true
-gh label create "priority: critical" --color e11d48 --description "Production down or security vulnerability" || true
-gh label create "priority: high" --color fb923c --description "Major impact, common workflow broken" || true
-gh label create "priority: medium" --color fbbf24 --description "Normal priority, workaround exists" || true
-gh label create "priority: low" --color 22c55e --description "Edge case or minor impact" || true
+gh label create bug --color d73a4a --description "Something isn't working" --force
+gh label create feature --color a2eeef --description "New feature or request" --force
+gh label create enhancement --color 84b6eb --description "Improvement to an existing feature" --force
+gh label create docs --color 0075ca --description "Improvements or additions to documentation" --force
+gh label create chore --color fef2c0 --description "Maintenance, infra, or tooling" --force
+gh label create "priority: critical" --color e11d48 --description "Production down or security vulnerability" --force
+gh label create "priority: high" --color fb923c --description "Major impact, common workflow broken" --force
+gh label create "priority: medium" --color fbbf24 --description "Normal priority, workaround exists" --force
+gh label create "priority: low" --color 22c55e --description "Edge case or minor impact" --force
 ```
 
 ## Step 5: Classify the PR
