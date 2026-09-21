@@ -8,6 +8,11 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, review_requested]
+  # These two carry the repository's secrets even for a pull request from a
+  # fork, unlike `pull_request`. The jobs they reach are gated on the actor
+  # being Jules exactly — a substring match on `jules` was satisfied by any
+  # account named to contain it, including one opening the pull request under
+  # review.
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
@@ -166,8 +171,8 @@ jobs:
         github.event.pull_request.user.login != 'dependabot[bot]'
       ) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '') ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.user.login, 'jules')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.user.login, 'jules'))
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'google-labs-jules[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'google-labs-jules[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -221,7 +226,7 @@ jobs:
           jules_context=""
 
           # Jules authored the PR (google-labs-jules[bot])
-          if [[ "$PR_AUTHOR" == *"jules"* ]]; then
+          if [[ "$PR_AUTHOR" == "google-labs-jules[bot]" ]]; then
             is_jules="true"
             jules_context="jules-authored-pr"
           fi
@@ -233,13 +238,13 @@ jobs:
           fi
 
           # Jules submitted a review
-          if [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$REVIEW_AUTHOR" == *"jules"* ]]; then
+          if [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$REVIEW_AUTHOR" == "google-labs-jules[bot]" ]]; then
             is_jules="true"
             jules_context="jules-review-submitted"
           fi
 
           # Jules posted a review comment (suggestion)
-          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]] && [[ "$COMMENT_AUTHOR" == *"jules"* ]]; then
+          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]] && [[ "$COMMENT_AUTHOR" == "google-labs-jules[bot]" ]]; then
             is_jules="true"
             jules_context="jules-review-comment"
           fi
