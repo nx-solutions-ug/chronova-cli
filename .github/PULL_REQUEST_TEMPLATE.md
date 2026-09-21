@@ -1,48 +1,48 @@
-<!--
-Title: use a Conventional Commits subject (`feat:`, `fix:`, `docs:`, `chore:`, `ci:`, …).
-PRs are squash-merged, so this title becomes the commit subject and is what the
-release tooling reads — see `AGENTS.md` for how this repo cuts releases.
-Base branch: `main`.
--->
+<!-- These comments never render. Keep the body short: someone with no context should
+     understand what changes, and why, in under a minute. -->
 
-## Summary
+# Replace this heading with a one-line description of the issue
 
-<!-- 1–2 sentences: what this PR does and why. Link the issue it closes, e.g. "Fixes #42". -->
+<!-- ↑ The issue, not the fix. e.g. "# The review bot judges tooling it cannot run"
 
-## Type
+     ↓ Then two or three sentences on what this PR covers, for someone who reads no
+     further: the areas it touches, and what it deliberately leaves alone.
+     Flowing prose, not bullets — the bullets start at Why.                       -->
 
-<!-- Tick exactly one. The `label-pr` workflow classifies from the title, this body and the
-     diff, so ticking the right box here makes the label it applies deterministic.
-     Priority is the bot's call — don't set it. -->
+## Intent
 
-- [ ] `bug` — fixes broken behavior or incorrect results
-- [ ] `feature` — adds a capability that did not exist before
-- [ ] `enhancement` — improves an existing feature or behavior
-- [ ] `docs` — documentation only
-- [ ] `chore` — maintenance, infrastructure, CI, tooling, or dependencies
+### Why
 
-## Changes
+<!-- One bullet per reason, each with evidence a reviewer can check: a finding, an
+     incident, an issue, a version, a link. The diff shows what changed and never why,
+     so this is the half that decides whether the change is right.
+     e.g. - #812 reports a 422 on any value outside the nine chips; both the issue and
+            the endpoint's Zod schema specify free text.                          -->
 
-<!-- What actually changed, grouped by area. Name the file or module a reviewer should read
-     first, and call out anything renamed, moved or deleted. -->
+-
 
-## Testing
+### What
 
-<!-- How you verified this. List the commands you actually ran and what they reported —
-     not the ones you intended to run. If a gate was skipped, say so and why. -->
+<!-- One bullet per change: what it DOES and where (app, area, module). Not a file list —
+     the diff already has that, and not a restatement of Why. Last bullet: anything
+     deliberately left out.
+     e.g. - `src/lib/profile`: `profession` becomes free text; the nine values stay as
+            suggestions.
+          - Not included: moderation of the typed text — that is #824.            -->
 
-- [ ] The quality gates in `AGENTS.md` pass locally (that file lists this repo's commands)
-- [ ] New or changed behavior is covered by tests, or this PR explains why it isn't
+-
 
-## Repository conventions
+## Verification
 
-<!-- `AGENTS.md` is the contract for this repo — architecture, conventions, commands and lint
-     rules. Claude Code loads it through the built-in `agents-md@builtin` plugin, which is why
-     there is no `CLAUDE.md`. Read it before opening a PR; update it as part of one. -->
+<!-- The real commands and the real numbers. Name the gates you ran from `AGENTS.md`
+     (lint, format:check, type-check, test) and what they actually reported — if you ran
+     a subset, say which and why. No E2E is configured in this repo, so a UI change says
+     how it was exercised by hand instead. Close with what you did NOT verify: a gap
+     named beats a claim unchecked. -->
 
-- [ ] Follows the conventions in `AGENTS.md` (naming, imports, error handling, validation)
-- [ ] `AGENTS.md` is updated if this PR changes architecture, commands, conventions or lint rules
+## Test Plan
 
-## Notes for reviewers
+<!-- Boxes a reviewer ticks before merging; an unticked one is a question worth asking. -->
 
-<!-- Trade-offs taken, deliberate omissions, follow-up work. Delete this section if empty. -->
+- [ ] CI passes
+- [ ]
