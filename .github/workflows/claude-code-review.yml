@@ -295,6 +295,45 @@ jobs:
           fetch-depth: 0  # Required for git diff against base branch to prevent HTTP 406 on >300 files
           persist-credentials: false
 
+      # The reviewer used to read the diff without ever being able to run the
+      # gates the diff has to pass: with no toolchain, `cargo fmt` and
+      # `cargo clippy` were unavailable and reviews said so instead of
+      # verifying. Toolchain and cache match test.yml.
+      #
+      # Fetched BEFORE the app token exists, and the order is the security
+      # property. Cargo resolves the checked-out PR's own manifest, and this
+      # workflow triggers on `pull_request_review` and
+      # `pull_request_review_comment`, which carry the repository's secrets
+      # regardless of where the PR came from — the gate for those paths only
+      # asks whether the reviewer's login contains `jules`, which anyone can
+      # arrange for their own PR. Fetching first means no privileged token is
+      # sitting in the runner's gh config while PR-controlled build files are
+      # processed.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Fetch dependencies
+        id: install
+        # A failing install must not cost the PR its review — a lockfile that
+        # will not resolve is itself worth reviewing. The step's outcome is
+        # handed to Claude as TOOLCHAIN_READY, and the prompt falls back to
+        # reading the diff when it is false.
+        continue-on-error: true
+        run: cargo fetch --locked
+
       - name: Generate app token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -318,6 +357,10 @@ jobs:
       - name: Run code review
         id: claude
         uses: anthropics/claude-code-action@v1
+        # Consumed by review-pr.md's gate step. Step-level, because job-level
+        # `env` cannot read `steps.*`.
+        env:
+          TOOLCHAIN_READY: ${{ steps.install.outcome == 'success' }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}

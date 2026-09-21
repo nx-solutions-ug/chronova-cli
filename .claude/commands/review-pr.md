@@ -209,6 +209,45 @@ Dependency PRs do NOT use the inline-review submission in Step 7. Stop after pos
 3. Deduplicate against existing unresolved review threads (see Step 6.4).
 4. Submit the review per Step 7 — `REQUEST_CHANGES` for bugs/security/type safety, `APPROVE` for clean changes or minor nits only.
 
+## Step 5.5: Run the gates
+
+The workflow installs the Rust toolchain and fetches the dependencies before
+handing the PR over, so the checks this diff has to pass are runnable here. Do
+not report a finding you could have confirmed or refuted by running them.
+
+```bash
+echo "TOOLCHAIN_READY=${TOOLCHAIN_READY:-false}"
+```
+
+If `TOOLCHAIN_READY` is `false`, the fetch failed. Skip this step, review from
+the diff alone, and say so in one sentence in the review body — a manifest that
+will not resolve is itself worth mentioning.
+
+Otherwise:
+
+```bash
+cargo fmt -- --check
+cargo clippy -- -D warnings
+```
+
+How to read the output:
+
+- **Clippy findings**: `-D warnings` is what CI enforces, so anything it prints
+  fails the build. If the file is not in this PR's diff it is pre-existing —
+  note it in the review body rather than as a finding on a line nobody here
+  wrote.
+- **`cargo fmt` failures**: one line in the review body naming the files. Do not
+  post per-line formatting comments.
+- Clippy compiles the crate, so a type error surfaces here too, and it is
+  blocking.
+
+`cargo test` stays out: the Test gate already runs it on every push, across
+three operating systems.
+
+State in the review body which of these you actually ran. A review that claims
+verification it did not perform is worse than one that admits reading only the
+diff.
+
 ## Step 6: Mapping findings to diff lines
 
 GitHub inline review comments MUST reference a line that exists in the PR diff. A comment that points at a line not in the diff will be rejected with an error. Follow these rules exactly.
