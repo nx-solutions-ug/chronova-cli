@@ -1373,8 +1373,10 @@ mod tests {
     #[tokio::test]
     async fn test_background_sync_start_disabled() {
         let api_client = ApiClient::new("http://localhost:8080".to_string());
-        let mut config = SyncConfig::default();
-        config.background_sync = false;
+        let config = SyncConfig {
+            background_sync: false,
+            ..SyncConfig::default()
+        };
         let sync_manager = ChronovaSyncManager::with_config(config, api_client);
 
         let result = sync_manager.start_background_sync().await;
@@ -1437,8 +1439,11 @@ mod tests {
     #[tokio::test]
     async fn test_sync_interval_configuration() {
         let api_client = ApiClient::new("http://localhost:8080".to_string());
-        let mut config = SyncConfig::default();
-        config.sync_interval_seconds = 60; // 1 minute
+        // 1 minute
+        let config = SyncConfig {
+            sync_interval_seconds: 60,
+            ..SyncConfig::default()
+        };
         let sync_manager = ChronovaSyncManager::with_config(config, api_client);
 
         // Verify the configuration is properly set

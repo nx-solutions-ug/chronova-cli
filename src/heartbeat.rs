@@ -714,10 +714,6 @@ mod tests {
         // Test that HeartbeatManagerExt is implemented by calling methods directly
         let stats = manager.get_queue_stats();
         assert!(stats.is_ok(), "get_queue_stats should return Ok");
-        assert!(
-            true,
-            "HeartbeatManager should implement HeartbeatManagerExt"
-        );
     }
 
     #[test]

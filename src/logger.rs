@@ -103,7 +103,6 @@ impl FormatTime for ChronoLocalTimer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     #[test]
     fn test_log_file_path() {
@@ -115,7 +114,6 @@ mod tests {
     fn test_setup_logging() {
         // This test just ensures the function doesn't panic
         // We can't easily test the actual logging behavior without complex setup
-        let temp_file = NamedTempFile::new().unwrap();
         let _guard = setup_logging(false).unwrap();
 
         // Log a test message
