@@ -203,9 +203,12 @@ impl HeartbeatManager {
         });
 
         // Determine branch with priority: cli.branch > git branch
-        let branch = cli
-            .branch
-            .or_else(|| git_info.as_ref().and_then(|g| g.branch.clone()));
+        let branch = if self.config.disable_git_info || self.config.hide_branch_names {
+            None
+        } else {
+            cli.branch
+                .or_else(|| git_info.as_ref().and_then(|g| g.branch.clone()))
+        };
 
         // Determine language with priority: cli.language > detected language
         let language_name = cli.language.or(language);

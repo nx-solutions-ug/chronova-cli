@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::cli::Cli;
-use crate::collector::DataCollector;
+use crate::collector::{DataCollector, GitInfo};
 use crate::config::Config;
 use crate::heartbeat::{AiTelemetry, Heartbeat, HeartbeatManager, HeartbeatManagerExt};
 use crate::queue::{Queue, QueueOps};
@@ -101,6 +101,7 @@ pub async fn sync_ai_activity(cli: &Cli, config: Config) -> Result<usize> {
     let collector = DataCollector::new();
     let mut ctx = BuildContext::new(
         &collector,
+        &config,
         cli.plugin.as_deref(),
         cli.project_folder.as_deref(),
     );
@@ -1154,26 +1155,31 @@ fn app_heartbeat_entity(parser_name: &str, raw_entity: &str) -> String {
 /// because a single sync commonly yields hundreds of records in a few projects.
 struct BuildContext<'a> {
     collector: &'a DataCollector,
+    config: &'a Config,
     plugin: Option<&'a str>,
     project_folder: Option<&'a str>,
     machine: Option<String>,
     project_cache: HashMap<String, Option<String>>,
     language_cache: HashMap<String, Option<String>>,
+    git_cache: HashMap<String, Option<GitInfo>>,
 }
 
 impl<'a> BuildContext<'a> {
     fn new(
         collector: &'a DataCollector,
+        config: &'a Config,
         plugin: Option<&'a str>,
         project_folder: Option<&'a str>,
     ) -> Self {
         Self {
             collector,
+            config,
             plugin,
             project_folder,
             machine: Some(gethostname::gethostname().to_string_lossy().into_owned()),
             project_cache: HashMap::new(),
             language_cache: HashMap::new(),
+            git_cache: HashMap::new(),
         }
     }
 
@@ -1198,6 +1204,46 @@ impl<'a> BuildContext<'a> {
         } else {
             None
         };
+
+        // A file names its own repository, and a worktree is only visible from
+        // the file's own path. An `app` entity is the session id, not a path,
+        // so it falls back to the cwd the line already attributes its project
+        // from.
+        let git = if self.config.disable_git_info {
+            None
+        } else {
+            let path = if record.entity_type == "file" {
+                Some(record.entity.as_str())
+            } else {
+                record.project_dir.as_deref()
+            };
+            match path {
+                Some(path) => self.git_for(path).await,
+                None => None,
+            }
+        };
+
+        let hidden = |hide: bool, value: Option<String>| if hide { None } else { value };
+        let branch = hidden(
+            self.config.hide_branch_names,
+            git.as_ref().and_then(|g| g.branch.clone()),
+        );
+        let commit_hash = hidden(
+            self.config.hide_commit_hash,
+            git.as_ref().and_then(|g| g.commit_hash.clone()),
+        );
+        let commit_author = hidden(
+            self.config.hide_commit_author,
+            git.as_ref().and_then(|g| g.commit_author.clone()),
+        );
+        let commit_message = hidden(
+            self.config.hide_commit_message,
+            git.as_ref().and_then(|g| g.commit_message.clone()),
+        );
+        let repository_url = hidden(
+            self.config.hide_repository_url,
+            git.as_ref().and_then(|g| g.repository_url.clone()),
+        );
 
         // Every line count the API accepts must be non-negative, so a net
         // deletion reports its magnitude as "suggested" and zero as "accepted".
@@ -1228,7 +1274,7 @@ impl<'a> BuildContext<'a> {
             entity_type: record.entity_type.to_string(),
             time: record.time,
             project,
-            branch: None,
+            branch,
             language,
             is_write: record.is_write,
             lines: None,
@@ -1242,10 +1288,10 @@ impl<'a> BuildContext<'a> {
             // editor from `user_agent` instead, which already names Claude Code.
             editor: None,
             operating_system: None,
-            commit_hash: None,
-            commit_author: None,
-            commit_message: None,
-            repository_url: None,
+            commit_hash,
+            commit_author,
+            commit_message,
+            repository_url,
             dependencies: Vec::new(),
             ai,
         }]
@@ -1277,6 +1323,15 @@ impl<'a> BuildContext<'a> {
         });
         self.project_cache
             .insert(path.to_string(), resolved.clone());
+        resolved
+    }
+
+    async fn git_for(&mut self, path: &str) -> Option<GitInfo> {
+        if let Some(cached) = self.git_cache.get(path) {
+            return cached.clone();
+        }
+        let resolved = self.collector.detect_git_info(path).await;
+        self.git_cache.insert(path.to_string(), resolved.clone());
         resolved
     }
 
@@ -1318,6 +1373,134 @@ mod tests {
 
     fn find<'a>(records: &'a [Record], entity: &str) -> Option<&'a Record> {
         records.iter().find(|r| r.entity == entity)
+    }
+
+    fn repo_with_commit(dir: &TempDir) -> PathBuf {
+        use git2::{Repository, Signature};
+
+        let repo_dir = dir.path().join("repo");
+        fs::create_dir_all(&repo_dir).unwrap();
+        let repo = Repository::init(&repo_dir).expect("init repo");
+        fs::write(repo_dir.join("README.md"), "hello").unwrap();
+
+        let mut index = repo.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = Signature::now("Test Author", "author@example.com").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+            .unwrap();
+        repo.remote("origin", "https://example.com/repo.git")
+            .unwrap();
+
+        repo_dir
+    }
+
+    fn record_at(entity: &str, entity_type: &'static str, project_dir: Option<&str>) -> Record {
+        Record {
+            entity: entity.to_string(),
+            entity_type,
+            time: 1.0,
+            is_write: false,
+            line_changes: 0,
+            action: "tool_use".to_string(),
+            model: "claude-opus-5".to_string(),
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            project_dir: project_dir.map(|s| s.to_string()),
+        }
+    }
+
+    fn build_one(config: Config, record: Record) -> Heartbeat {
+        let collector = DataCollector::new();
+        let mut ctx = BuildContext::new(&collector, &config, None, None);
+        let mut built = tokio_test::block_on(ctx.build(record));
+        assert_eq!(built.len(), 1, "one record builds one heartbeat");
+        built.remove(0)
+    }
+
+    #[test]
+    fn a_file_heartbeat_carries_the_git_information_of_its_repository() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let hb = build_one(
+            Config::default(),
+            record_at(file.to_str().unwrap(), "file", None),
+        );
+
+        assert!(hb.branch.is_some(), "branch");
+        assert_eq!(hb.commit_author.as_deref(), Some("Test Author"));
+        assert_eq!(hb.commit_message.as_deref(), Some("initial commit"));
+        assert_eq!(
+            hb.repository_url.as_deref(),
+            Some("https://example.com/repo.git")
+        );
+        assert!(hb.commit_hash.is_some(), "commit_hash");
+    }
+
+    #[test]
+    fn an_app_heartbeat_falls_back_to_the_directory_it_attributes_its_project_from() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+
+        let hb = build_one(
+            Config::default(),
+            record_at("Claude sess-1", "app", repo_dir.to_str()),
+        );
+
+        assert_eq!(hb.entity_type, "app");
+        assert_eq!(hb.commit_author.as_deref(), Some("Test Author"));
+        assert!(hb.commit_hash.is_some(), "commit_hash");
+        assert!(hb.branch.is_some(), "branch");
+    }
+
+    #[test]
+    fn an_app_heartbeat_without_a_directory_reports_no_git_information() {
+        let hb = build_one(Config::default(), record_at("Claude sess-1", "app", None));
+
+        assert!(hb.branch.is_none());
+        assert!(hb.commit_hash.is_none());
+        assert!(hb.repository_url.is_none());
+    }
+
+    #[test]
+    fn disable_git_info_suppresses_every_git_field() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            disable_git_info: true,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert!(hb.branch.is_none());
+        assert!(hb.commit_hash.is_none());
+        assert!(hb.commit_author.is_none());
+        assert!(hb.commit_message.is_none());
+        assert!(hb.repository_url.is_none());
+    }
+
+    #[test]
+    fn each_hide_flag_suppresses_only_its_own_field() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_branch_names: true,
+            hide_commit_message: true,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert!(hb.branch.is_none(), "hidden branch");
+        assert!(hb.commit_message.is_none(), "hidden message");
+        assert!(hb.commit_hash.is_some(), "hash stays");
+        assert!(hb.repository_url.is_some(), "url stays");
     }
 
     #[test]
