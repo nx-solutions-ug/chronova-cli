@@ -8,6 +8,11 @@ name: Claude Code Review
 on:
   pull_request:
     types: [opened, synchronize, ready_for_review, review_requested]
+  # These two carry the repository's secrets even for a pull request from a
+  # fork, unlike `pull_request`. The jobs they reach are gated on the actor
+  # being Jules exactly — a substring match on `jules` was satisfied by any
+  # account named to contain it, including one opening the pull request under
+  # review.
   pull_request_review:
     types: [submitted]
   pull_request_review_comment:
@@ -166,8 +171,8 @@ jobs:
         github.event.pull_request.user.login != 'dependabot[bot]'
       ) ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number != '') ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.user.login, 'jules')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.user.login, 'jules'))
+      (github.event_name == 'pull_request_review' && github.event.review.user.login == 'google-labs-jules[bot]') ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.user.login == 'google-labs-jules[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -221,7 +226,7 @@ jobs:
           jules_context=""
 
           # Jules authored the PR (google-labs-jules[bot])
-          if [[ "$PR_AUTHOR" == *"jules"* ]]; then
+          if [[ "$PR_AUTHOR" == "google-labs-jules[bot]" ]]; then
             is_jules="true"
             jules_context="jules-authored-pr"
           fi
@@ -233,13 +238,13 @@ jobs:
           fi
 
           # Jules submitted a review
-          if [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$REVIEW_AUTHOR" == *"jules"* ]]; then
+          if [[ "$EVENT_NAME" == "pull_request_review" ]] && [[ "$REVIEW_AUTHOR" == "google-labs-jules[bot]" ]]; then
             is_jules="true"
             jules_context="jules-review-submitted"
           fi
 
           # Jules posted a review comment (suggestion)
-          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]] && [[ "$COMMENT_AUTHOR" == *"jules"* ]]; then
+          if [[ "$EVENT_NAME" == "pull_request_review_comment" ]] && [[ "$COMMENT_AUTHOR" == "google-labs-jules[bot]" ]]; then
             is_jules="true"
             jules_context="jules-review-comment"
           fi
@@ -295,6 +300,44 @@ jobs:
           fetch-depth: 0  # Required for git diff against base branch to prevent HTTP 406 on >300 files
           persist-credentials: false
 
+      # The reviewer used to read the diff without ever being able to run the
+      # gates the diff has to pass: with no toolchain, `cargo fmt` and
+      # `cargo clippy` were unavailable and reviews said so instead of
+      # verifying. Toolchain and cache match test.yml.
+      #
+      # Fetched BEFORE the app token exists, and the order is the security
+      # property. Cargo resolves the checked-out PR's own manifest, and this
+      # workflow triggers on `pull_request_review` and
+      # `pull_request_review_comment`, which carry the repository's secrets
+      # regardless of where the PR came from — those paths check out the fork's
+      # own head even when the reviewer genuinely is Jules, which the gate
+      # below requires. Fetching first means no privileged token is sitting in
+      # the runner's gh config while PR-controlled build files are processed.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Fetch dependencies
+        id: install
+        # A failing install must not cost the PR its review — a lockfile that
+        # will not resolve is itself worth reviewing. The step's outcome is
+        # handed to Claude as TOOLCHAIN_READY, and the prompt falls back to
+        # reading the diff when it is false.
+        continue-on-error: true
+        run: cargo fetch --locked
+
       - name: Generate app token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -318,6 +361,10 @@ jobs:
       - name: Run code review
         id: claude
         uses: anthropics/claude-code-action@v1
+        # Consumed by review-pr.md's gate step. Step-level, because job-level
+        # `env` cannot read `steps.*`.
+        env:
+          TOOLCHAIN_READY: ${{ steps.install.outcome == 'success' }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}

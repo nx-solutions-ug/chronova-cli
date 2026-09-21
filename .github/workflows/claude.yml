@@ -44,6 +44,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # The agent holds Edit and Write and a commit/push contract, so it needs
+      # the gates it is expected to leave green. Versions match test.yml.
+      # Unlike claude-code-review this job checks out the default branch rather
+      # than a PR head, so what runs here is the repository's own code.
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Fetch dependencies
+        id: install
+        # A freeform prompt is not worth failing over a lockfile the agent was
+        # probably asked to fix.
+        continue-on-error: true
+        run: cargo fetch --locked
+
       - name: Generate app token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -130,6 +157,12 @@ jobs:
         if: steps.build-prompt.outputs.has_prompt == 'true'
         id: claude
         uses: anthropics/claude-code-action@v1
+        # `/claude review-pr 42` resolves the same .claude/commands/review-pr.md
+        # that claude-code-review runs, and its gate step reads this. Without it
+        # the reviewer reported a failed fetch on a path where the fetch had
+        # just succeeded.
+        env:
+          TOOLCHAIN_READY: ${{ steps.install.outcome == 'success' }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
