@@ -34,15 +34,16 @@
 
 ## Verification
 
-<!-- The real commands and the real numbers. Name the gates you ran from `AGENTS.md`
-     (lint, format:check, type-check, test) and what they actually reported — if you ran
-     a subset, say which and why. No E2E is configured in this repo, so a UI change says
-     how it was exercised by hand instead. Close with what you did NOT verify: a gap
-     named beats a claim unchecked. -->
+<!-- The real commands and the real numbers. Name the gates you ran from `AGENTS.md` —
+     that file lists this repo's own, whatever its stack — and what they actually
+     reported; if you ran a subset, say which and why. No E2E is configured here, so a UI
+     change says how it was exercised by hand instead. Close with what you did NOT
+     verify: a gap named beats a claim unchecked. -->
 
 ## Test Plan
 
 <!-- Boxes a reviewer ticks before merging; an unticked one is a question worth asking. -->
 
 - [ ] CI passes
-- [ ]
+- [ ] Title is a Conventional Commits subject — it becomes the squash commit subject and is what the release tooling reads
+- [ ] `AGENTS.md` is still accurate for this change (conventions, commands, architecture, lint rules)
