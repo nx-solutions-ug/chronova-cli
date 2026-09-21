@@ -420,6 +420,22 @@ struct StructuredPatch {
     old_lines: i32,
 }
 
+/// One file a shell command changed, as Claude Code reports it in
+/// `bashEditDiff`. The hunks carry the same shape as `structuredPatch`.
+#[derive(Debug, Deserialize)]
+struct BashEditFile {
+    #[serde(default, rename = "filePath")]
+    file_path: Option<String>,
+    #[serde(default)]
+    hunks: Vec<StructuredPatch>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BashEditDiff {
+    #[serde(default)]
+    files: Vec<BashEditFile>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ToolUseResultFile {
     #[serde(default, rename = "filePath")]
@@ -452,6 +468,8 @@ struct ToolUseResult {
     new_string: Option<String>,
     #[serde(default, rename = "structuredPatch")]
     structured_patch: Option<Vec<StructuredPatch>>,
+    #[serde(default, rename = "bashEditDiff")]
+    bash_edit_diff: Option<BashEditDiff>,
     /// Remaining keys, used only to recognise agent-bookkeeping results.
     #[serde(flatten)]
     raw: HashMap<String, serde_json::Value>,
@@ -818,6 +836,24 @@ fn parse_transcript(path: &Path, cutoff: DateTime<Utc>) -> Result<Vec<Record>> {
             if assign_tokens { Some(tokens) } else { None },
         ) {
             records.push(record);
+            assign_tokens = false;
+            produced += 1;
+        }
+
+        // A shell command edits files too — `sed -i`, a formatter, codegen, a
+        // checkout. Claude Code reports those in `bashEditDiff` with the same
+        // hunks an Edit carries, and they are the larger share of file activity
+        // in an agentic session. Without this they were the session's only
+        // trace, so the work showed up as time with no file and no language.
+        for record in bash_edit_records(
+            &log_line,
+            time,
+            &model_token(&model, &effort),
+            &cwd,
+            cwd_from_transcript,
+            if assign_tokens { Some(tokens) } else { None },
+        ) {
+            records.push(record);
             produced += 1;
         }
 
@@ -845,6 +881,58 @@ fn should_advance_for_noop(log_line: &LogLine) -> bool {
         Some(_) => false,
         None => false,
     }
+}
+
+/// One record per file a shell command changed.
+///
+/// `file_record` handles the Edit and Write tools, which report exactly one
+/// path per result. A single shell command can touch many files at once, so
+/// this yields a record for each and lets the token delta land on the first.
+fn bash_edit_records(
+    log_line: &LogLine,
+    time: f64,
+    model: &str,
+    cwd: &str,
+    cwd_from_transcript: bool,
+    tokens: Option<Tokens>,
+) -> Vec<Record> {
+    let Some(ToolUseResultValue::Object(result)) = log_line.tool_use_result.as_ref() else {
+        return Vec::new();
+    };
+    let Some(diff) = result.bash_edit_diff.as_ref() else {
+        return Vec::new();
+    };
+
+    let mut records = Vec::new();
+    let mut remaining = tokens;
+
+    for file in &diff.files {
+        let Some(path) = file.file_path.as_deref() else {
+            continue;
+        };
+        if path.is_empty() || is_task_output_path(path) {
+            continue;
+        }
+
+        let line_changes: i32 = file.hunks.iter().map(|h| h.new_lines - h.old_lines).sum();
+        let (prompt_tokens, completion_tokens) =
+            remaining.take().map(|t| t.delta()).unwrap_or((0, 0));
+
+        records.push(Record {
+            entity: path.to_string(),
+            entity_type: "file",
+            time,
+            is_write: true,
+            line_changes,
+            prompt_tokens,
+            completion_tokens,
+            action: "edit".to_string(),
+            project_dir: (cwd_from_transcript && !cwd.is_empty()).then(|| cwd.to_string()),
+            model: model.to_string(),
+        });
+    }
+
+    records
 }
 
 fn app_record(
@@ -1501,6 +1589,70 @@ mod tests {
         assert!(hb.commit_message.is_none(), "hidden message");
         assert!(hb.commit_hash.is_some(), "hash stays");
         assert!(hb.repository_url.is_some(), "url stays");
+    }
+
+    #[test]
+    fn a_shell_command_that_edits_files_yields_one_record_per_file() {
+        let dir = TempDir::new().unwrap();
+        let path = write_transcript(
+            &dir,
+            "sess-bash.jsonl",
+            &[
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"done","bashEditDiff":{"changedFiles":2,"moreFiles":0,"files":[{"filePath":"/proj/src/a.ts","hunks":[{"oldStart":1,"oldLines":4,"newStart":1,"newLines":9}]},{"filePath":"/proj/docs/b.md","hunks":[{"oldStart":1,"oldLines":10,"newStart":1,"newLines":7}]}]}}}"#,
+            ],
+        );
+
+        let records = parse_transcript(&path, epoch()).unwrap();
+
+        let a = find(&records, "/proj/src/a.ts").expect("ts record");
+        assert_eq!(a.entity_type, "file");
+        assert!(a.is_write);
+        assert_eq!(a.line_changes, 5);
+        assert_eq!(a.project_dir.as_deref(), Some("/proj"));
+
+        let b = find(&records, "/proj/docs/b.md").expect("md record");
+        assert_eq!(b.entity_type, "file");
+        assert_eq!(b.line_changes, -3);
+    }
+
+    #[test]
+    fn a_shell_command_that_changes_nothing_yields_no_file_record() {
+        let dir = TempDir::new().unwrap();
+        let path = write_transcript(
+            &dir,
+            "sess-plain.jsonl",
+            &[
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"all tests passed","stderr":""}}"#,
+            ],
+        );
+
+        let records = parse_transcript(&path, epoch()).unwrap();
+        assert!(
+            records.iter().all(|r| r.entity_type != "file"),
+            "a plain shell command works on no file"
+        );
+    }
+
+    #[test]
+    fn a_shell_edit_of_a_task_output_artifact_is_skipped() {
+        let dir = TempDir::new().unwrap();
+        let path = write_transcript(
+            &dir,
+            "sess-artifact.jsonl",
+            &[
+                r#"{"type":"user","timestamp":"2026-09-13T10:00:00Z","cwd":"/proj","version":"2.1.0","toolUseResult":{"stdout":"x","bashEditDiff":{"changedFiles":2,"moreFiles":0,"files":[{"filePath":"/tmp/claude-1000/sess/tasks/run.output","hunks":[{"oldStart":1,"oldLines":0,"newStart":1,"newLines":40}]},{"filePath":"/proj/src/real.ts","hunks":[{"oldStart":1,"oldLines":1,"newStart":1,"newLines":2}]}]}}}"#,
+            ],
+        );
+
+        let records = parse_transcript(&path, epoch()).unwrap();
+        assert!(
+            find(&records, "/tmp/claude-1000/sess/tasks/run.output").is_none(),
+            "a task output artifact is not the user's file work"
+        );
+        assert!(
+            find(&records, "/proj/src/real.ts").is_some(),
+            "the real file in the same command still counts"
+        );
     }
 
     #[test]
