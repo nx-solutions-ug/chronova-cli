@@ -156,6 +156,15 @@ Two behaviours that are easy to trip over and hard to notice:
    held, so the next run re-derives it from the transcripts, which are the real
    durable store (see Landmines).
 
+   A line yields a file heartbeat from **two** places, and missing the second
+   one is how most of an agent's file work went unrecorded until v1.7.0:
+   `structuredPatch`/`newString`, which the Edit and Write tools produce, and
+   `bashEditDiff`, which Claude Code attaches to a shell result that changed
+   files — `sed -i`, a formatter, codegen, a checkout. The second carries the
+   same `{filePath, hunks[{oldLines,newLines}]}` shape, and one shell command
+   can name many files, so it yields a record per file while the Edit path
+   yields one.
+
 ## Dependencies to Know
 
 - `clap` - CLI parsing with derive macros
