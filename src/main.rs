@@ -64,10 +64,11 @@ async fn main() -> Result<()> {
         };
 
         // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        apply_cli_overrides(&mut config, &cli);
 
         // Fetch and display today's activity
         if let Err(e) = fetch_today_activity(&config, &cli).await {
@@ -265,10 +266,11 @@ async fn main() -> Result<()> {
                 process::exit(1);
             });
 
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        apply_cli_overrides(&mut config, &cli);
 
         match chronova_cli::ai_sync::sync_ai_activity(&cli, config).await {
             Ok(count) => {
