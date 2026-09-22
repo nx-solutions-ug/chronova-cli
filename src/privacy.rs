@@ -181,14 +181,6 @@ impl Sanitizer {
         project.is_some_and(|p| !p.is_empty())
     }
 
-    /// Whether `--hide-branch-names` covers this entity.
-    ///
-    /// Exposed for the AI-sync path, which drops the branch instead of
-    /// replacing it and so never calls [`Sanitizer::redact`].
-    pub fn hides_branch_name(&self, entity: &str) -> bool {
-        self.hide_branch_names.applies_to(entity)
-    }
-
     /// Whether the entity path has to be made relative to its project root.
     ///
     /// Callers use this to avoid detecting the project root when no flag

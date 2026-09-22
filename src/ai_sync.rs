@@ -1355,10 +1355,7 @@ impl<'a> BuildContext<'a> {
         };
 
         let hidden = |hide: bool, value: Option<String>| if hide { None } else { value };
-        let branch = hidden(
-            self.sanitizer.hides_branch_name(&record.entity),
-            git.as_ref().and_then(|g| g.branch.clone()),
-        );
+        let branch = git.as_ref().and_then(|g| g.branch.clone());
         let commit_hash = hidden(
             self.config.hide_commit_hash,
             git.as_ref().and_then(|g| g.commit_hash.clone()),
@@ -1399,7 +1396,7 @@ impl<'a> BuildContext<'a> {
             is_ai_agent: Some(true),
         };
 
-        vec![Heartbeat {
+        let mut heartbeat = Heartbeat {
             id: uuid::Uuid::new_v4().to_string(),
             entity: record.entity,
             entity_type: record.entity_type.to_string(),
@@ -1425,7 +1422,28 @@ impl<'a> BuildContext<'a> {
             repository_url,
             dependencies: Vec::new(),
             ai,
-        }]
+        };
+
+        // AI heartbeats carry real paths out of the transcripts, so they go
+        // through the same filtering and redaction as the `--entity` path.
+        // Logging stays on `debug`/`warn`, which reach the file layer only:
+        // a successful `--sync-ai-activity` run has to be byte-silent.
+        if !self.sanitizer.allows_entity(&heartbeat.entity)
+            || !self.sanitizer.allows_project(heartbeat.project.as_deref())
+        {
+            tracing::debug!("filtered out ai heartbeat for {}", heartbeat.entity);
+            return Vec::new();
+        }
+
+        let project_root = if self.sanitizer.strips_project_folder() {
+            self.collector.containing_project_root(&heartbeat.entity)
+        } else {
+            None
+        };
+        self.sanitizer
+            .redact(&mut heartbeat, project_root.as_deref());
+
+        vec![heartbeat]
     }
 
     /// Appends a `model/<name>` token to the finished user agent.
@@ -1542,12 +1560,96 @@ mod tests {
         }
     }
 
-    fn build_one(config: Config, record: Record) -> Heartbeat {
+    fn build_all(config: Config, record: Record) -> Vec<Heartbeat> {
         let collector = DataCollector::new();
         let mut ctx = BuildContext::new(&collector, &config, None, None);
-        let mut built = tokio_test::block_on(ctx.build(record));
+        tokio_test::block_on(ctx.build(record))
+    }
+
+    fn build_one(config: Config, record: Record) -> Heartbeat {
+        let mut built = build_all(config, record);
         assert_eq!(built.len(), 1, "one record builds one heartbeat");
         built.remove(0)
+    }
+
+    #[test]
+    fn an_excluded_file_yields_no_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            ignore_patterns: vec![r"\.md$".to_string()],
+            ..Config::default()
+        };
+
+        assert!(
+            build_all(config, record_at(file.to_str().unwrap(), "file", None)).is_empty(),
+            "an excluded transcript entity must never reach the queue"
+        );
+    }
+
+    #[test]
+    fn an_include_list_that_does_not_match_yields_no_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            include_patterns: vec!["/nowhere/".to_string()],
+            ..Config::default()
+        };
+
+        assert!(build_all(config, record_at(file.to_str().unwrap(), "file", None)).is_empty());
+    }
+
+    #[test]
+    fn hide_file_names_redacts_an_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_file_names: crate::privacy::HideRule::Always,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert_eq!(hb.entity, "HIDDEN.md");
+        assert!(
+            hb.ai.is_ai_agent.unwrap_or(false),
+            "redaction keeps the heartbeat and its telemetry"
+        );
+    }
+
+    #[test]
+    fn hide_project_names_redacts_an_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_project_names: crate::privacy::HideRule::Always,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert_eq!(hb.project.as_deref(), Some("HIDDEN"));
+    }
+
+    #[test]
+    fn hide_project_folder_makes_an_ai_entity_relative() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_project_folder: true,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert_eq!(hb.entity, "README.md");
     }
 
     #[test]
@@ -1628,7 +1730,11 @@ mod tests {
         };
         let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
 
-        assert!(hb.branch.is_none(), "hidden branch");
+        assert_eq!(
+            hb.branch.as_deref(),
+            Some("HIDDEN"),
+            "branch redacted, not dropped"
+        );
         assert!(hb.commit_message.is_none(), "hidden message");
         assert!(hb.commit_hash.is_some(), "hash stays");
         assert!(hb.repository_url.is_some(), "url stays");
