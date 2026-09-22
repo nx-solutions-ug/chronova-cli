@@ -5,6 +5,7 @@ use thiserror::Error;
 
 use crate::api::{TransportOptions, DEFAULT_TIMEOUT_SECONDS};
 use crate::cli::Cli;
+use crate::privacy::HideRule;
 use crate::sync::SyncConfig;
 
 #[derive(Error, Debug)]
@@ -26,9 +27,9 @@ pub struct Config {
     /// Seconds to wait for an API request; `None` means the built-in default.
     pub timeout: Option<u64>,
     pub ignore_patterns: Vec<String>,
-    pub hide_file_names: bool,
-    pub hide_project_names: bool,
-    pub hide_branch_names: bool,
+    pub hide_file_names: HideRule,
+    pub hide_project_names: HideRule,
+    pub hide_branch_names: HideRule,
     pub hide_commit_hash: bool,
     pub hide_commit_author: bool,
     pub hide_commit_message: bool,
@@ -83,16 +84,19 @@ impl Config {
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok())),
             hide_file_names: settings
                 .get("hide_file_names")
-                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
-                .unwrap_or(false),
+                .and_then(|s| s.as_ref().and_then(|v| v.parse::<bool>().ok()))
+                .map(HideRule::from)
+                .unwrap_or_default(),
             hide_project_names: settings
                 .get("hide_project_names")
-                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
-                .unwrap_or(false),
+                .and_then(|s| s.as_ref().and_then(|v| v.parse::<bool>().ok()))
+                .map(HideRule::from)
+                .unwrap_or_default(),
             hide_branch_names: settings
                 .get("hide_branch_names")
-                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
-                .unwrap_or(false),
+                .and_then(|s| s.as_ref().and_then(|v| v.parse::<bool>().ok()))
+                .map(HideRule::from)
+                .unwrap_or_default(),
             hide_commit_hash: settings
                 .get("hide_commit_hash")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
@@ -358,9 +362,9 @@ impl Default for Config {
                 "TAG_EDITMSG$".to_string(),
             ],
             include_patterns: vec![],
-            hide_file_names: false,
-            hide_project_names: false,
-            hide_branch_names: false,
+            hide_file_names: HideRule::Never,
+            hide_project_names: HideRule::Never,
+            hide_branch_names: HideRule::Never,
             hide_commit_hash: false,
             hide_commit_author: false,
             hide_commit_message: false,
@@ -467,7 +471,7 @@ exclude =
             Some("https://chronova.local:3000/api/v1".to_string())
         );
         assert!(config.debug);
-        assert!(config.hide_file_names);
+        assert_eq!(config.hide_file_names, HideRule::Always);
         assert!(config.ignore_patterns.contains(&"*.tmp".to_string()));
         assert!(config.ignore_patterns.contains(&"*.log".to_string()));
     }

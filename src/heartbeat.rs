@@ -7,6 +7,7 @@ use crate::api::ApiClient;
 use crate::cli::Cli;
 use crate::collector::DataCollector;
 use crate::config::Config;
+use crate::privacy::Sanitizer;
 use crate::queue::{Queue, QueueOps};
 use crate::sync::{SyncResult, SyncStatusSummary};
 use crate::user_agent::generate_user_agent;
@@ -137,6 +138,7 @@ pub struct HeartbeatManager {
     authenticated_api_client: Option<crate::api::AuthenticatedApiClient>,
     queue: Queue,
     collector: DataCollector,
+    sanitizer: Sanitizer,
 }
 
 /// Minimal editor information attached to a heartbeat
@@ -197,6 +199,7 @@ impl HeartbeatManager {
             .get_api_key(None)
             .map(|key| api_client.clone().with_api_key(key));
         let collector = DataCollector::new();
+        let sanitizer = Sanitizer::new(&config);
 
         Ok(Self {
             config,
@@ -204,6 +207,7 @@ impl HeartbeatManager {
             authenticated_api_client,
             queue,
             collector,
+            sanitizer,
         })
     }
 
@@ -239,19 +243,16 @@ impl HeartbeatManager {
         // Entity is guaranteed to be Some at this point (checked in main)
         let entity = cli.entity.take().expect("Entity should be present");
 
-        // Check if entity should be ignored
-        if self.should_ignore_entity(&entity) {
-            tracing::debug!("Ignoring entity: {}", entity);
-            return Ok(());
-        }
-
         // --disable-offline (CLI > config file > default, matching the
-        // disable_git_info/hide_* merge pattern below in main.rs) must be
-        // read before create_heartbeat consumes `cli`.
+        // disable_git_info/hide_* merge pattern in main.rs) must be read
+        // before `prepare_heartbeat` consumes `cli`.
         let disable_offline = self.config.disable_offline || cli.disable_offline;
 
-        // Create heartbeat from CLI arguments
-        let heartbeat = self.create_heartbeat(cli, entity).await?;
+        // Filters and redacts before returning; a `None` means the heartbeat
+        // was filtered out and must not be queued *or* sent.
+        let Some(heartbeat) = self.prepare_heartbeat(cli, entity).await? else {
+            return Ok(());
+        };
 
         if disable_offline {
             // --disable-offline: send directly and drop the heartbeat on
@@ -312,6 +313,49 @@ impl HeartbeatManager {
         Ok(())
     }
 
+    /// Build the heartbeat that should be sent for `entity`, or `None` when
+    /// the filtering rules say it must not be sent at all.
+    ///
+    /// Returning `None` before the caller ever reaches the queue is what keeps
+    /// an excluded entity out of the offline queue, where it would otherwise
+    /// wait to leak on the next sync.
+    async fn prepare_heartbeat(
+        &self,
+        cli: Cli,
+        entity: String,
+    ) -> Result<Option<Heartbeat>, anyhow::Error> {
+        if !self.sanitizer.allows_entity(&entity) {
+            tracing::debug!("Ignoring entity: {}", entity);
+            return Ok(None);
+        }
+
+        // Only pay for project detection here when a flag actually needs the
+        // root; `create_heartbeat` detects it again for the project name.
+        // `containing_project_root` rather than `detect_project`, because the
+        // latter resolves a worktree to its main repository, which is not a
+        // prefix of the entity and so would strip nothing at all.
+        let project_root = if self.sanitizer.strips_project_folder() {
+            self.collector.containing_project_root(&entity)
+        } else {
+            None
+        };
+
+        let mut heartbeat = self.create_heartbeat(cli, entity).await?;
+
+        if !self.sanitizer.allows_project(heartbeat.project.as_deref()) {
+            tracing::debug!(
+                "Ignoring entity with undetected project: {}",
+                heartbeat.entity
+            );
+            return Ok(None);
+        }
+
+        self.sanitizer
+            .redact(&mut heartbeat, project_root.as_deref());
+
+        Ok(Some(heartbeat))
+    }
+
     /// Builds a `Heartbeat` for `entity` from `cli`, collecting project,
     /// git and language metadata for it. Public so callers outside this
     /// module (the `--extra-heartbeats` path in `main.rs`) can reuse the
@@ -345,7 +389,9 @@ impl HeartbeatManager {
             resolve_project_name(cli.project, detected_project_name, cli.alternate_project);
 
         // Determine branch with priority: cli.branch > git branch
-        let branch = if self.config.disable_git_info || self.config.hide_branch_names {
+        // `hide_branch_names` is applied by the sanitizer, which replaces the
+        // branch with `HIDDEN` rather than dropping it.
+        let branch = if self.config.disable_git_info {
             None
         } else {
             cli.branch
@@ -399,48 +445,6 @@ impl HeartbeatManager {
         })
     }
 
-    fn should_ignore_entity(&self, entity: &str) -> bool {
-        // Simple pattern matching for ignore rules
-        for pattern in &self.config.ignore_patterns {
-            if pattern.ends_with('$') {
-                // Exact match at end
-                let base_pattern = &pattern[..pattern.len() - 1];
-                if entity.ends_with(base_pattern) {
-                    return true;
-                }
-            } else if let Some(extension) = pattern.strip_prefix("*.") {
-                // File extension pattern
-                if entity.ends_with(extension) {
-                    return true;
-                }
-            } else if entity.contains(pattern) {
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Flush the offline queue, one batch at a time.
-    ///
-    /// Returns `(synced, not_synced)`. Anything the server did not accept but
-    /// might yet — an entry it never mentioned, or a batch it asked us to stop
-    /// sending — counts as not synced, *not* only the entries that have
-    /// exhausted their retries.
-    ///
-    /// A heartbeat the server refused outright with a `400` counts as neither.
-    /// It is dropped rather than retried, so it is not synced, but it is not
-    /// unfinished business either; counting it as failed would make a window the
-    /// server deliberately discarded look like a total failure and send
-    /// `ai_sync` back to re-derive it forever.
-    ///
-    /// That distinction is load-bearing. `ai_sync::sync_ai_activity` rolls its
-    /// batch back and holds `ai_logs_last_parsed_at` when
-    /// `synced_count == 0 && failed_count > 0`, and advances the cutoff
-    /// otherwise. If a batch the server silently dropped reported
-    /// `(0, 0)` instead, the cutoff would advance as though the work were done
-    /// while those heartbeats sat in a queue that the next `--entity`
-    /// invocation wipes (`HeartbeatManager::new`). The transcripts are the
-    /// durable store; this number is what decides whether to go back to them.
     async fn process_queue(&self) -> Result<(usize, usize), anyhow::Error> {
         // Age-based retention runs once per flush, ahead of processing, via
         // a transient `Queue::new()` inside `spawn_blocking` — the same
@@ -894,12 +898,39 @@ impl HeartbeatManager {
     /// directly and drop it on failure instead of queueing. Used by
     /// `--extra-heartbeats`, which previously queued unconditionally and
     /// never read this flag at all.
-    pub async fn add_heartbeat_to_queue(&self, heartbeat: Heartbeat) -> anyhow::Result<()> {
-        // Check if entity should be ignored
-        if self.should_ignore_entity(&heartbeat.entity) {
+    ///
+    /// Filtering and redaction run *before* either outcome. A heartbeat that
+    /// leaves this process must be redacted whether it is queued or sent
+    /// directly — putting the `--disable-offline` branch above the sanitizer
+    /// would send unredacted paths over the wire under
+    /// `--disable-offline --hide-project-names`, which is the exact leak the
+    /// privacy flags exist to prevent.
+    pub async fn add_heartbeat_to_queue(&self, mut heartbeat: Heartbeat) -> anyhow::Result<()> {
+        // `allows_entity` subsumes the old `should_ignore_entity`: the
+        // Sanitizer's exclude list is compiled from `config.ignore_patterns`
+        // (privacy.rs), so this one check covers both.
+        if !self.sanitizer.allows_entity(&heartbeat.entity) {
             tracing::debug!("Ignoring entity: {}", heartbeat.entity);
             return Ok(());
         }
+
+        if !self.sanitizer.allows_project(heartbeat.project.as_deref()) {
+            tracing::debug!(
+                "Ignoring entity with undetected project: {}",
+                heartbeat.entity
+            );
+            return Ok(());
+        }
+
+        // The entity is a real path, so the strip root is one lookup away —
+        // the same one `prepare_heartbeat` does.
+        let project_root = if self.sanitizer.strips_project_folder() {
+            self.collector.containing_project_root(&heartbeat.entity)
+        } else {
+            None
+        };
+        self.sanitizer
+            .redact(&mut heartbeat, project_root.as_deref());
 
         if self.config.disable_offline {
             let send_result = if let Some(auth_client) = &self.authenticated_api_client {
@@ -950,6 +981,33 @@ mod tests {
         (manager, temp_dir)
     }
 
+    fn test_heartbeat(entity: &str) -> Heartbeat {
+        Heartbeat {
+            id: Uuid::new_v4().to_string(),
+            entity: entity.to_string(),
+            entity_type: "file".to_string(),
+            time: 1_700_000_000.0,
+            project: Some("chronova-cli".to_string()),
+            branch: Some("main".to_string()),
+            language: None,
+            is_write: false,
+            lines: None,
+            lineno: None,
+            cursorpos: None,
+            user_agent: None,
+            category: None,
+            machine: None,
+            editor: None,
+            operating_system: None,
+            commit_hash: None,
+            commit_author: None,
+            commit_message: None,
+            repository_url: None,
+            dependencies: Vec::new(),
+            ai: Default::default(),
+        }
+    }
+
     fn sample_heartbeat(id: &str) -> Heartbeat {
         Heartbeat {
             id: id.to_string(),
@@ -975,6 +1033,21 @@ mod tests {
             dependencies: Vec::new(),
             ai: Default::default(),
         }
+    }
+
+    /// Build the CLI a plugin would pass for a plain file heartbeat.
+    fn test_cli(entity: &str) -> Cli {
+        <Cli as clap::Parser>::parse_from(["chronova-cli", "--entity", entity])
+    }
+
+    fn queued_entities(manager: &HeartbeatManager) -> Vec<String> {
+        manager
+            .queue
+            .get_pending(None, None)
+            .expect("queue readable")
+            .into_iter()
+            .map(|h| h.entity)
+            .collect()
     }
 
     /// Regression test for the finding: constructing a `HeartbeatManager`
@@ -1278,18 +1351,248 @@ mod tests {
         assert_ne!(heartbeat.project, Some("alt-project".to_string()));
     }
 
-    #[test]
-    fn test_should_ignore_entity() {
+    #[tokio::test]
+    async fn excluded_entity_is_never_enqueued() {
         let config = Config {
-            ignore_patterns: vec!["COMMIT_EDITMSG$".to_string(), "*.tmp".to_string()],
+            ignore_patterns: vec!["COMMIT_EDITMSG$".to_string(), "/secret/".to_string()],
             ..Default::default()
         };
-
         let (manager, _temp_dir) = create_test_manager(config);
 
-        assert!(manager.should_ignore_entity("/path/to/COMMIT_EDITMSG"));
-        assert!(manager.should_ignore_entity("/path/to/file.tmp"));
-        assert!(!manager.should_ignore_entity("/path/to/normal_file.rs"));
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/.git/COMMIT_EDITMSG"))
+            .await
+            .expect("excluded heartbeat is dropped, not an error");
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/secret/keys.rs"))
+            .await
+            .expect("excluded heartbeat is dropped, not an error");
+
+        assert_eq!(
+            queued_entities(&manager),
+            Vec::<String>::new(),
+            "an excluded heartbeat must not sit in the offline queue"
+        );
+
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/src/main.rs"))
+            .await
+            .expect("allowed heartbeat is queued");
+        assert_eq!(queued_entities(&manager), vec!["/repo/src/main.rs"]);
+    }
+
+    #[tokio::test]
+    async fn include_list_drops_everything_it_does_not_match() {
+        let config = Config {
+            ignore_patterns: vec![],
+            include_patterns: vec!["/work/".to_string()],
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/home/dev/hobby/main.rs"))
+            .await
+            .expect("filtered heartbeat is dropped, not an error");
+
+        assert_eq!(queued_entities(&manager), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn include_wins_over_exclude_at_the_queue_door() {
+        let config = Config {
+            ignore_patterns: vec![".*\\.rs$".to_string()],
+            include_patterns: vec!["/work/".to_string()],
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/home/dev/work/main.rs"))
+            .await
+            .expect("included heartbeat is queued");
+
+        assert_eq!(queued_entities(&manager), vec!["/home/dev/work/main.rs"]);
+    }
+
+    #[tokio::test]
+    async fn invalid_exclude_pattern_is_skipped_and_the_rest_still_apply() {
+        // `*.tmp` is a glob rather than a regex: it is warned about and
+        // skipped, while the valid pattern beside it keeps working.
+        let config = Config {
+            ignore_patterns: vec!["*.tmp".to_string(), "COMMIT_EDITMSG$".to_string()],
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/scratch.tmp"))
+            .await
+            .expect("queued");
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/.git/COMMIT_EDITMSG"))
+            .await
+            .expect("dropped");
+
+        assert_eq!(queued_entities(&manager), vec!["/repo/scratch.tmp"]);
+    }
+
+    #[tokio::test]
+    async fn unknown_project_is_dropped_when_excluded() {
+        let config = Config {
+            exclude_unknown_project: true,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let mut unknown = test_heartbeat("/repo/src/main.rs");
+        unknown.project = None;
+        manager
+            .add_heartbeat_to_queue(unknown)
+            .await
+            .expect("dropped, not an error");
+        assert_eq!(queued_entities(&manager), Vec::<String>::new());
+
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/src/main.rs"))
+            .await
+            .expect("queued");
+        assert_eq!(queued_entities(&manager), vec!["/repo/src/main.rs"]);
+    }
+
+    #[tokio::test]
+    async fn queued_heartbeats_are_redacted() {
+        let config = Config {
+            hide_file_names: crate::privacy::HideRule::Always,
+            hide_project_names: crate::privacy::HideRule::Always,
+            hide_branch_names: crate::privacy::HideRule::Always,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        manager
+            .add_heartbeat_to_queue(test_heartbeat("/repo/src/secret.rs"))
+            .await
+            .expect("queued");
+
+        let queued = manager
+            .queue
+            .get_pending(None, None)
+            .expect("queue readable");
+        assert_eq!(queued.len(), 1, "redaction replaces, it does not drop");
+        assert_eq!(queued[0].entity, "HIDDEN.rs");
+        assert_eq!(queued[0].project.as_deref(), Some("HIDDEN"));
+        assert_eq!(queued[0].branch.as_deref(), Some("HIDDEN"));
+    }
+
+    #[tokio::test]
+    async fn prepare_heartbeat_drops_an_excluded_entity() {
+        let config = Config {
+            ignore_patterns: vec!["/secret/".to_string()],
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let entity = "/home/dev/secret/keys.rs".to_string();
+        let prepared = manager
+            .prepare_heartbeat(test_cli(&entity), entity)
+            .await
+            .expect("filtering is not an error");
+
+        assert!(
+            prepared.is_none(),
+            "an excluded entity must never reach the queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_heartbeat_redacts_the_file_name() {
+        let config = Config {
+            hide_file_names: crate::privacy::HideRule::Always,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let entity = temp.path().join("secret.rs").to_string_lossy().into_owned();
+        std::fs::write(&entity, "fn main() {}").expect("write entity");
+
+        let prepared = manager
+            .prepare_heartbeat(test_cli(&entity), entity)
+            .await
+            .expect("no error")
+            .expect("redaction keeps the heartbeat");
+
+        assert_eq!(prepared.entity, "HIDDEN.rs");
+    }
+
+    /// The strip root must be a prefix of the entity *as given*, never a
+    /// resolved form of it.
+    ///
+    /// This one deliberately does not canonicalise: on Windows a `TempDir`
+    /// hands back the 8.3 short form (`C:\Users\RUNNER~1\...`), so if the
+    /// root were ever canonicalised to the long form the two would stop
+    /// matching and the flag would silently emit the full path — a leak, not
+    /// a cosmetic failure. Running this on every platform keeps that honest.
+    #[tokio::test]
+    async fn prepare_heartbeat_strips_an_uncanonicalised_project_folder() {
+        let config = Config {
+            hide_project_folder: true,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path();
+        std::fs::write(root.join("Cargo.toml"), "[package]").expect("project marker");
+        std::fs::create_dir(root.join("src")).expect("src dir");
+        let entity_path = root.join("src").join("main.rs");
+        std::fs::write(&entity_path, "fn main() {}").expect("write entity");
+        let entity = entity_path.to_string_lossy().into_owned();
+
+        let prepared = manager
+            .prepare_heartbeat(test_cli(&entity), entity)
+            .await
+            .expect("no error")
+            .expect("redaction keeps the heartbeat");
+
+        assert_eq!(
+            prepared.entity,
+            std::path::Path::new("src")
+                .join("main.rs")
+                .to_string_lossy()
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_heartbeat_strips_the_project_folder() {
+        let config = Config {
+            hide_project_folder: true,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().canonicalize().expect("canonical root");
+        std::fs::write(root.join("Cargo.toml"), "[package]").expect("project marker");
+        std::fs::create_dir(root.join("src")).expect("src dir");
+        let entity_path = root.join("src").join("main.rs");
+        std::fs::write(&entity_path, "fn main() {}").expect("write entity");
+        let entity = entity_path.to_string_lossy().into_owned();
+
+        let prepared = manager
+            .prepare_heartbeat(test_cli(&entity), entity)
+            .await
+            .expect("no error")
+            .expect("redaction keeps the heartbeat");
+
+        assert_eq!(
+            prepared.entity,
+            std::path::Path::new("src")
+                .join("main.rs")
+                .to_string_lossy(),
+            "the stripped path keeps the platform's separator"
+        );
     }
 
     #[test]

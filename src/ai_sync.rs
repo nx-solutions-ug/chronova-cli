@@ -28,6 +28,7 @@ use crate::cli::Cli;
 use crate::collector::{DataCollector, GitInfo};
 use crate::config::Config;
 use crate::heartbeat::{AiTelemetry, Heartbeat, HeartbeatManager, HeartbeatManagerExt};
+use crate::privacy::Sanitizer;
 use crate::queue::{Queue, QueueOps};
 use crate::user_agent::generate_user_agent;
 
@@ -1294,6 +1295,7 @@ fn app_heartbeat_entity(parser_name: &str, raw_entity: &str) -> String {
 struct BuildContext<'a> {
     collector: &'a DataCollector,
     config: &'a Config,
+    sanitizer: Sanitizer,
     plugin: Option<&'a str>,
     project_folder: Option<&'a str>,
     machine: Option<String>,
@@ -1312,6 +1314,7 @@ impl<'a> BuildContext<'a> {
         Self {
             collector,
             config,
+            sanitizer: Sanitizer::new(config),
             plugin,
             project_folder,
             machine: Some(gethostname::gethostname().to_string_lossy().into_owned()),
@@ -1335,6 +1338,34 @@ impl<'a> BuildContext<'a> {
             if let Some(folder) = self.project_folder {
                 project = self.project_for(folder).await;
             }
+        }
+
+        // Filtering matches a path. An `app` entity is the session id, not a
+        // path, so it filters on the cwd the line attributes its project from
+        // — the same fallback the git block below uses. Matching the session
+        // id instead would fail in both directions: an `exclude` for a
+        // repository would never drop that repository's `app` heartbeats, and
+        // an `include` of path patterns would drop every one of them.
+        let filter_path = if record.entity_type == "file" {
+            Some(record.entity.clone())
+        } else {
+            record
+                .project_dir
+                .clone()
+                .or_else(|| self.project_folder.map(|folder| folder.to_string()))
+                .map(|dir| as_directory_path(&dir))
+        };
+
+        // Filter before anything else is looked up: a heartbeat that must not
+        // be sent should not cost a git or language probe either. Logging
+        // stays on `debug`, which reaches the file layer only, because a
+        // successful `--sync-ai-activity` run has to be byte-silent.
+        let allowed = filter_path
+            .as_deref()
+            .is_none_or(|path| self.sanitizer.allows_entity(path));
+        if !allowed || !self.sanitizer.allows_project(project.as_deref()) {
+            tracing::debug!("filtered out ai heartbeat for {}", record.entity);
+            return Vec::new();
         }
 
         let language = if record.entity_type == "file" {
@@ -1362,10 +1393,7 @@ impl<'a> BuildContext<'a> {
         };
 
         let hidden = |hide: bool, value: Option<String>| if hide { None } else { value };
-        let branch = hidden(
-            self.config.hide_branch_names,
-            git.as_ref().and_then(|g| g.branch.clone()),
-        );
+        let branch = git.as_ref().and_then(|g| g.branch.clone());
         let commit_hash = hidden(
             self.config.hide_commit_hash,
             git.as_ref().and_then(|g| g.commit_hash.clone()),
@@ -1406,7 +1434,7 @@ impl<'a> BuildContext<'a> {
             is_ai_agent: Some(true),
         };
 
-        vec![Heartbeat {
+        let mut heartbeat = Heartbeat {
             id: uuid::Uuid::new_v4().to_string(),
             entity: record.entity,
             entity_type: record.entity_type.to_string(),
@@ -1432,7 +1460,18 @@ impl<'a> BuildContext<'a> {
             repository_url,
             dependencies: Vec::new(),
             ai,
-        }]
+        };
+
+        // Redaction uses the same rules as the `--entity` path.
+        let project_root = if self.sanitizer.strips_project_folder() {
+            self.collector.containing_project_root(&heartbeat.entity)
+        } else {
+            None
+        };
+        self.sanitizer
+            .redact(&mut heartbeat, project_root.as_deref());
+
+        vec![heartbeat]
     }
 
     /// Appends a `model/<name>` token to the finished user agent.
@@ -1482,6 +1521,20 @@ impl<'a> BuildContext<'a> {
             .insert(path.to_string(), resolved.clone());
         resolved
     }
+}
+
+/// A directory path ending in the platform separator.
+///
+/// A transcript's `cwd` is stored exactly as it was written, and a real one
+/// carries no trailing separator (`/home/dev/private-repo`). Filter patterns
+/// are unanchored regexes, so without this a pattern naming the repository
+/// itself — `/private-repo/`, the natural way to write it — would miss the
+/// directory it names and let that repository's `app` telemetry out.
+fn as_directory_path(dir: &str) -> String {
+    if dir.ends_with(std::path::MAIN_SEPARATOR) {
+        return dir.to_string();
+    }
+    format!("{}{}", dir, std::path::MAIN_SEPARATOR)
 }
 
 fn truncate(value: &str, max: usize) -> String {
@@ -1549,12 +1602,181 @@ mod tests {
         }
     }
 
-    fn build_one(config: Config, record: Record) -> Heartbeat {
+    /// A filter pattern naming a repository directory, written the way a user
+    /// on this platform would have to write it.
+    ///
+    /// Patterns are regexes over native paths, so the separator is the
+    /// platform's own and has to be escaped: on Windows a bare `\` would be
+    /// read as the start of a regex escape. That is also what a Windows user
+    /// has to do by hand, here and for file patterns.
+    fn repo_pattern(name: &str) -> String {
+        let sep = std::path::MAIN_SEPARATOR;
+        regex::escape(&format!("{}{}{}", sep, name, sep))
+    }
+
+    fn build_all(config: Config, record: Record) -> Vec<Heartbeat> {
         let collector = DataCollector::new();
         let mut ctx = BuildContext::new(&collector, &config, None, None);
-        let mut built = tokio_test::block_on(ctx.build(record));
+        tokio_test::block_on(ctx.build(record))
+    }
+
+    fn build_one(config: Config, record: Record) -> Heartbeat {
+        let mut built = build_all(config, record);
         assert_eq!(built.len(), 1, "one record builds one heartbeat");
         built.remove(0)
+    }
+
+    #[test]
+    fn an_excluded_file_yields_no_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            ignore_patterns: vec![r"\.md$".to_string()],
+            ..Config::default()
+        };
+
+        assert!(
+            build_all(config, record_at(file.to_str().unwrap(), "file", None)).is_empty(),
+            "an excluded transcript entity must never reach the queue"
+        );
+    }
+
+    #[test]
+    fn an_app_heartbeat_is_excluded_by_its_repository_not_its_session_id() {
+        // The session id matches no path pattern, so filtering it directly
+        // would let an excluded repository's prompt and token telemetry out.
+        // The cwd is stored exactly as the transcript wrote it, and a real one
+        // carries no trailing separator, so the fixture must not add one.
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("private-repo");
+        fs::create_dir(&repo).unwrap();
+        let cwd = repo.to_str().unwrap();
+        assert!(!cwd.ends_with(std::path::MAIN_SEPARATOR), "slashless cwd");
+
+        let config = Config {
+            ignore_patterns: vec![repo_pattern("private-repo")],
+            ..Config::default()
+        };
+
+        assert!(
+            build_all(config, record_at("Claude sess-1", "app", Some(cwd))).is_empty(),
+            "an app heartbeat from an excluded repository must be dropped"
+        );
+    }
+
+    #[test]
+    fn an_app_heartbeat_survives_a_repository_level_include() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("work-repo");
+        fs::create_dir(&repo).unwrap();
+        let cwd = repo.to_str().unwrap();
+        assert!(!cwd.ends_with(std::path::MAIN_SEPARATOR), "slashless cwd");
+
+        let config = Config {
+            include_patterns: vec![repo_pattern("work-repo")],
+            ..Config::default()
+        };
+        let built = build_all(config, record_at("Claude sess-1", "app", Some(cwd)));
+
+        assert_eq!(
+            built.len(),
+            1,
+            "an include list of path patterns must not drop app telemetry"
+        );
+        assert_eq!(built[0].entity, "Claude sess-1");
+    }
+
+    #[test]
+    fn a_directory_path_is_normalised_to_end_in_a_separator() {
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            as_directory_path("/home/dev/private-repo"),
+            format!("/home/dev/private-repo{}", sep)
+        );
+        assert_eq!(
+            as_directory_path(&format!("/home/dev/private-repo{}", sep)),
+            format!("/home/dev/private-repo{}", sep),
+            "an already-terminated path is left alone"
+        );
+    }
+
+    #[test]
+    fn an_app_heartbeat_without_a_path_to_match_is_allowed() {
+        let config = Config {
+            include_patterns: vec!["/work-repo/".to_string()],
+            ..Config::default()
+        };
+
+        assert_eq!(
+            build_all(config, record_at("Claude sess-1", "app", None)).len(),
+            1,
+            "nothing to match against means the filter cannot judge it"
+        );
+    }
+
+    #[test]
+    fn an_include_list_that_does_not_match_yields_no_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            include_patterns: vec!["/nowhere/".to_string()],
+            ..Config::default()
+        };
+
+        assert!(build_all(config, record_at(file.to_str().unwrap(), "file", None)).is_empty());
+    }
+
+    #[test]
+    fn hide_file_names_redacts_an_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_file_names: crate::privacy::HideRule::Always,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert_eq!(hb.entity, "HIDDEN.md");
+        assert!(
+            hb.ai.is_ai_agent.unwrap_or(false),
+            "redaction keeps the heartbeat and its telemetry"
+        );
+    }
+
+    #[test]
+    fn hide_project_names_redacts_an_ai_heartbeat() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_project_names: crate::privacy::HideRule::Always,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert_eq!(hb.project.as_deref(), Some("HIDDEN"));
+    }
+
+    #[test]
+    fn hide_project_folder_makes_an_ai_entity_relative() {
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        let file = repo_dir.join("README.md");
+
+        let config = Config {
+            hide_project_folder: true,
+            ..Config::default()
+        };
+        let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
+
+        assert_eq!(hb.entity, "README.md");
     }
 
     #[test]
@@ -1623,19 +1845,23 @@ mod tests {
     }
 
     #[test]
-    fn each_hide_flag_suppresses_only_its_own_field() {
+    fn each_hide_flag_redacts_only_its_own_field() {
         let dir = TempDir::new().unwrap();
         let repo_dir = repo_with_commit(&dir);
         let file = repo_dir.join("README.md");
 
         let config = Config {
-            hide_branch_names: true,
+            hide_branch_names: crate::privacy::HideRule::Always,
             hide_commit_message: true,
             ..Config::default()
         };
         let hb = build_one(config, record_at(file.to_str().unwrap(), "file", None));
 
-        assert!(hb.branch.is_none(), "hidden branch");
+        assert_eq!(
+            hb.branch.as_deref(),
+            Some("HIDDEN"),
+            "branch redacted, not dropped"
+        );
         assert!(hb.commit_message.is_none(), "hidden message");
         assert!(hb.commit_hash.is_some(), "hash stays");
         assert!(hb.repository_url.is_some(), "url stays");

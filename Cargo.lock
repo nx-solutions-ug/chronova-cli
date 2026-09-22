@@ -253,6 +253,7 @@ dependencies = [
  "lazy_static",
  "predicates",
  "rand 0.10.3",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

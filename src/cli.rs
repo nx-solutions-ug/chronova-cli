@@ -90,8 +90,8 @@ pub struct Cli {
     #[arg(long)]
     pub branch: Option<String>,
 
-    /// Obfuscate branch names. Will not send revision control branch names to api.
-    #[arg(long)]
+    /// Obfuscate branch names. Will not send revision control branch names to api. Optionally accepts regex patterns; branch names are only obfuscated for entities matching one of them.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
     pub hide_branch_names: Option<String>,
 
     /// Disable sending all git information (commit_hash, commit_author, commit_message, repository_url).
@@ -114,12 +114,12 @@ pub struct Cli {
     #[arg(long)]
     pub hide_repository_url: bool,
 
-    /// Obfuscate filenames. Will not send file names to api.
-    #[arg(long)]
+    /// Obfuscate filenames. Will not send file names to api; the file extension is kept. Optionally accepts regex patterns; file names are only obfuscated for entities matching one of them.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
     pub hide_file_names: Option<String>,
 
-    /// Obfuscate project names. When a project folder is detected instead of using the folder name as the project, a .wakatime-project file is created with a random project name.
-    #[arg(long)]
+    /// Obfuscate project names. Will not send project names to api. Optionally accepts regex patterns; project names are only obfuscated for entities matching one of them.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
     pub hide_project_names: Option<String>,
 
     /// When set, send the file's path relative to the project folder.
@@ -130,7 +130,7 @@ pub struct Cli {
     #[arg(long)]
     pub exclude: Option<Vec<String>>,
 
-    /// Filename patterns to log. When used in combination with --exclude, files matching include will still be logged. POSIX regex syntax. Can be used more than once.
+    /// Filename patterns to log. When set, only matching files are logged. When used in combination with --exclude, files matching include will still be logged. POSIX regex syntax. Can be used more than once.
     #[arg(long)]
     pub include: Option<Vec<String>>,
 

@@ -319,6 +319,16 @@ impl DataCollector {
         None
     }
 
+    /// The nearest ancestor of `entity_path` carrying a project marker.
+    ///
+    /// Unlike [`DataCollector::detect_project`], this never resolves a git
+    /// worktree to its main repository: `--hide-project-folder` strips a
+    /// prefix of the entity itself, and a worktree's main repository is not
+    /// one of its ancestors.
+    pub fn containing_project_root(&self, entity_path: &str) -> Option<PathBuf> {
+        self.find_project_root(Path::new(entity_path))
+    }
+
     fn find_project_root(&self, path: &Path) -> Option<PathBuf> {
         let mut current = path.parent()?;
 

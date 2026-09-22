@@ -6,6 +6,7 @@ use chronova_cli::api::ApiClient;
 use chronova_cli::cli::Cli;
 use chronova_cli::config::Config;
 use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
+use chronova_cli::privacy::HideRule;
 
 /// Applies CLI overrides to the loaded config. CLI beats file beats defaults.
 fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
@@ -30,6 +31,31 @@ fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     // git privacy flags above.
     if cli.disable_offline {
         config.disable_offline = true;
+    }
+    // Merge filtering and redaction flags from CLI: a flag the user typed
+    // must win over the config file, and CLI patterns add to the configured
+    // ones rather than replacing them, so a --exclude cannot silently
+    // un-exclude what the config file already hid.
+    if cli.hide_project_folder {
+        config.hide_project_folder = true;
+    }
+    if cli.exclude_unknown_project {
+        config.exclude_unknown_project = true;
+    }
+    if let Some(value) = &cli.hide_file_names {
+        config.hide_file_names = HideRule::parse(value);
+    }
+    if let Some(value) = &cli.hide_project_names {
+        config.hide_project_names = HideRule::parse(value);
+    }
+    if let Some(value) = &cli.hide_branch_names {
+        config.hide_branch_names = HideRule::parse(value);
+    }
+    if let Some(patterns) = &cli.exclude {
+        config.ignore_patterns.extend(patterns.iter().cloned());
+    }
+    if let Some(patterns) = &cli.include {
+        config.include_patterns.extend(patterns.iter().cloned());
     }
 }
 
@@ -292,6 +318,32 @@ async fn main() -> Result<()> {
         });
         apply_cli_overrides(&mut config, &cli);
         config.apply_transport_overrides(&cli);
+
+        // Merge filtering and redaction flags from CLI: a flag the user typed
+        // must win over the config file, and CLI patterns add to the configured
+        // ones rather than replacing them, so a --exclude cannot silently
+        // un-exclude what the config file already hid.
+        if cli.hide_project_folder {
+            config.hide_project_folder = true;
+        }
+        if cli.exclude_unknown_project {
+            config.exclude_unknown_project = true;
+        }
+        if let Some(value) = &cli.hide_file_names {
+            config.hide_file_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_project_names {
+            config.hide_project_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_branch_names {
+            config.hide_branch_names = HideRule::parse(value);
+        }
+        if let Some(patterns) = &cli.exclude {
+            config.ignore_patterns.extend(patterns.iter().cloned());
+        }
+        if let Some(patterns) = &cli.include {
+            config.include_patterns.extend(patterns.iter().cloned());
+        }
 
         match chronova_cli::ai_sync::sync_ai_activity(&cli, config).await {
             Ok(count) => {
