@@ -38,11 +38,15 @@ const MAX_TRANSCRIPT_TAIL_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Cutoff used the first time this machine ever runs an AI sync.
 ///
-/// Upstream backfills from a hardcoded 2025-02-24, but that is unsafe here: the
-/// Chronova API mints its own heartbeat ids and performs no de-duplication, so
-/// replaying transcripts that an older plugin build already reported would
-/// double-count every one of them. A short lookback is the safe default; to
-/// backfill a known gap, seed `ai_logs_last_parsed_at` explicitly.
+/// Upstream backfills from a hardcoded 2025-02-24. A short lookback is the
+/// cheaper default: replaying months of transcripts costs a long parse and a
+/// large upload to land rows the server will discard, since it de-duplicates on
+/// `(userId, time, entity)` before insert and our `time` comes from the
+/// transcript line, so it is stable across re-parses. To backfill a known gap,
+/// seed `ai_logs_last_parsed_at` explicitly.
+///
+/// The server does mint its own heartbeat ids, discarding the client UUID —
+/// that part is true, but ids are not what de-duplication keys on.
 const DEFAULT_LOOKBACK: Duration = Duration::from_secs(120);
 
 /// A lock file older than this is assumed to belong to a crashed run.
@@ -146,9 +150,11 @@ pub async fn sync_ai_activity(cli: &Cli, config: Config) -> Result<usize> {
     // On a total failure, take the batch back out and leave the cutoff alone so
     // the next run re-derives it from the transcripts. Transcripts are the
     // durable store; the queue is not, because any later `--entity` call
-    // constructs a `HeartbeatManager` and wipes it. Re-parsing is cheap.
-    // A partial success keeps its rows and advances, so retries cannot
-    // duplicate the heartbeats that did land.
+    // constructs a `HeartbeatManager` and wipes it. Re-parsing is cheap, and
+    // re-sending is harmless: the server de-duplicates on
+    // `(userId, time, entity)`, and `time` comes from the transcript line.
+    // A partial success keeps its rows and advances anyway, so the common case
+    // does not lean on that.
     match outcome {
         Ok(result) if result.synced_count == 0 && result.failed_count > 0 => {
             tracing::warn!(

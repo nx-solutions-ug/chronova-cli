@@ -437,29 +437,21 @@ impl HeartbeatManager {
                             // cascade for each of them — 50 heartbeats is 150
                             // requests that cannot succeed, and the
                             // failed-to-pending promotion would do it again on
-                            // the next pass. Put the batch back untouched.
+                            // the next pass. Put the batch back untouched and
+                            // report it; the counts go with the error, so a
+                            // caller that retries re-derives them from scratch.
                             tracing::error!(
                                 "Authentication rejected for the whole batch ({}); leaving {} heartbeat(s) queued",
                                 e,
                                 queued.len()
                             );
-                            total_failed += queued.len();
                             requeue_pending(
                                 queued.iter().map(|h| h.id.clone()).collect(),
                                 "Authentication rejected; deferred until the credentials change",
                             )
                             .await?;
 
-                            // Report it, but only while nothing has synced yet.
-                            // `ai_sync` rolls the whole run back on an `Err`,
-                            // and rolling back heartbeats the server already
-                            // accepted would have them re-derived from the
-                            // transcripts and counted twice, since the API
-                            // mints its own ids and does not de-duplicate.
-                            if total_synced == 0 {
-                                return Err(e.into());
-                            }
-                            break;
+                            return Err(e.into());
                         }
 
                         if let crate::api::ApiError::RateLimit { retry_after, .. } = &e {
