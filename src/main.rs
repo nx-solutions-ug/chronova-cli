@@ -9,9 +9,7 @@ use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
 
 /// Applies CLI overrides to the loaded config. CLI beats file beats defaults.
 fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
-    if let Some(key) = &cli.key {
-        config.api_key = Some(key.clone());
-    }
+    config.api_key = config.get_api_key(cli.key.as_ref());
     if cli.disable_git_info {
         config.disable_git_info = true;
     }
