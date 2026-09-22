@@ -221,6 +221,20 @@ pub fn apply_batch_outcome<Q: QueueOps>(
         applied.failed += 1;
     }
 
+    // Visible at the default level, and once per batch rather than once per
+    // heartbeat. This is the one place the CLI throws data away on purpose and
+    // never tries again, so a user wondering why their `/dist/` activity never
+    // shows up has a line to find. `info!`, not `warn!`: the server filtering
+    // by policy is it working correctly, and warning about routine correct
+    // behaviour is how warnings get ignored. The entity of each dropped
+    // heartbeat stays at `debug!` above.
+    if applied.discarded > 0 {
+        tracing::info!(
+            "{} heartbeat(s) dropped by the server; they will not be retried",
+            applied.discarded
+        );
+    }
+
     Ok(applied)
 }
 
