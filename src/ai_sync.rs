@@ -1592,6 +1592,18 @@ mod tests {
         }
     }
 
+    /// A filter pattern naming a repository directory, written the way a user
+    /// on this platform would have to write it.
+    ///
+    /// Patterns are regexes over native paths, so the separator is the
+    /// platform's own and has to be escaped: on Windows a bare `\` would be
+    /// read as the start of a regex escape. That is also what a Windows user
+    /// has to do by hand, here and for file patterns.
+    fn repo_pattern(name: &str) -> String {
+        let sep = std::path::MAIN_SEPARATOR;
+        regex::escape(&format!("{}{}{}", sep, name, sep))
+    }
+
     fn build_all(config: Config, record: Record) -> Vec<Heartbeat> {
         let collector = DataCollector::new();
         let mut ctx = BuildContext::new(&collector, &config, None, None);
@@ -1634,7 +1646,7 @@ mod tests {
         assert!(!cwd.ends_with(std::path::MAIN_SEPARATOR), "slashless cwd");
 
         let config = Config {
-            ignore_patterns: vec!["/private-repo/".to_string()],
+            ignore_patterns: vec![repo_pattern("private-repo")],
             ..Config::default()
         };
 
@@ -1653,7 +1665,7 @@ mod tests {
         assert!(!cwd.ends_with(std::path::MAIN_SEPARATOR), "slashless cwd");
 
         let config = Config {
-            include_patterns: vec!["/work-repo/".to_string()],
+            include_patterns: vec![repo_pattern("work-repo")],
             ..Config::default()
         };
         let built = build_all(config, record_at("Claude sess-1", "app", Some(cwd)));

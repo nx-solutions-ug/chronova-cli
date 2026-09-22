@@ -353,6 +353,20 @@ mod tests {
     }
 
     #[test]
+    fn a_native_separator_pattern_matches_a_native_separator_path() {
+        // Runs on every host, so the Windows shape is covered from Linux CI
+        // too: patterns are regexes over native paths, so a backslash
+        // separator has to be escaped to match one.
+        let s = sanitizer(Config {
+            ignore_patterns: vec![regex::escape(r"\private-repo\")],
+            ..Default::default()
+        });
+
+        assert!(!s.allows_entity(r"C:\Users\dev\private-repo\"));
+        assert!(s.allows_entity(r"C:\Users\dev\work-repo\"));
+    }
+
+    #[test]
     fn unknown_project_is_only_rejected_when_configured() {
         let permissive = sanitizer(Config::default());
         assert!(permissive.allows_project(None));

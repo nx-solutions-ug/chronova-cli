@@ -959,7 +959,13 @@ mod tests {
             .expect("no error")
             .expect("redaction keeps the heartbeat");
 
-        assert_eq!(prepared.entity, "src/main.rs");
+        assert_eq!(
+            prepared.entity,
+            std::path::Path::new("src")
+                .join("main.rs")
+                .to_string_lossy(),
+            "the stripped path keeps the platform's separator"
+        );
     }
 
     #[test]
