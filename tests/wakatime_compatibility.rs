@@ -114,6 +114,10 @@ api_url = {}
         .stdout(predicate::str::contains("min").or(predicate::str::contains("hour")));
 }
 
+// `HOME` override below only isolates state on Unix; `dirs::home_dir()`
+// ignores `$HOME` on Windows, so this would silently write to the real
+// CI account's home directory there instead of the tempdir.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_key_flag_overrides_config_file_key_on_the_wire() {
     use wiremock::matchers::{method, path};
