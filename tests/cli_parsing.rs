@@ -141,7 +141,7 @@ fn test_wakatime_timeout_argument() {
         "60",
     ];
     let cli = cli::Cli::parse_from(args);
-    assert_eq!(cli.timeout, 60);
+    assert_eq!(cli.timeout, Some(60));
 }
 
 #[test]
