@@ -1,6 +1,30 @@
 // Test for extra heartbeats processing functionality
 use assert_cmd::Command;
-use tempfile::NamedTempFile;
+use chronova_cli::queue::{Queue, QueueOps};
+use tempfile::{NamedTempFile, TempDir};
+
+// Unix only: `dirs::home_dir()` ignores `$HOME` on Windows and resolves the
+// real user profile instead, so this helper's isolation silently breaks
+// there (Queue::with_path fails because the tempdir's .chronova\ is never
+// created, and the binary would otherwise read/write the CI account's real
+// home). Do not ungate without giving Windows its own isolation strategy.
+#[cfg(unix)]
+/// Run `chronova-cli` with the given args and stdin under an isolated `$HOME`,
+/// then return every pending heartbeat left in that home's queue.db.
+fn run_and_read_queue(args: &[&str], stdin: &str) -> Vec<chronova_cli::heartbeat::Heartbeat> {
+    let home = TempDir::new().unwrap();
+
+    Command::cargo_bin("chronova-cli")
+        .unwrap()
+        .args(args)
+        .env("HOME", home.path())
+        .write_stdin(stdin)
+        .assert()
+        .success();
+
+    let queue = Queue::with_path(home.path().join(".chronova").join("queue.db")).unwrap();
+    queue.get_pending(Some(100), None).unwrap()
+}
 
 #[test]
 fn test_extra_heartbeats_with_missing_id() {
@@ -133,4 +157,68 @@ api_key = test-key-123
         .write_stdin(invalid_data)
         .assert()
         .failure();
+}
+
+// See the #[cfg(unix)] note on run_and_read_queue above.
+#[cfg(unix)]
+#[test]
+fn test_extra_heartbeats_keeps_primary_entity() {
+    let stdin_batch = r#"[
+        {"id": "a1", "entity": "extra-one.rs", "type": "file", "time": 1700000000.0, "is_write": false, "dependencies": []},
+        {"id": "a2", "entity": "extra-two.rs", "type": "file", "time": 1700000001.0, "is_write": false, "dependencies": []}
+    ]"#;
+
+    let heartbeats = run_and_read_queue(&["--entity", "foo.rs", "--extra-heartbeats"], stdin_batch);
+
+    assert_eq!(heartbeats.len(), 3);
+    let entities: Vec<&str> = heartbeats.iter().map(|h| h.entity.as_str()).collect();
+    assert!(entities.contains(&"foo.rs"));
+    assert!(entities.contains(&"extra-one.rs"));
+    assert!(entities.contains(&"extra-two.rs"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_extra_heartbeats_without_entity_is_unchanged() {
+    let stdin_batch = r#"[
+        {"id": "a1", "entity": "extra-one.rs", "type": "file", "time": 1700000000.0, "is_write": false, "dependencies": []},
+        {"id": "a2", "entity": "extra-two.rs", "type": "file", "time": 1700000001.0, "is_write": false, "dependencies": []}
+    ]"#;
+
+    let heartbeats = run_and_read_queue(&["--extra-heartbeats"], stdin_batch);
+
+    assert_eq!(heartbeats.len(), 2);
+    let entities: Vec<&str> = heartbeats.iter().map(|h| h.entity.as_str()).collect();
+    assert!(entities.contains(&"extra-one.rs"));
+    assert!(entities.contains(&"extra-two.rs"));
+}
+
+#[cfg(unix)]
+#[test]
+fn test_extra_heartbeats_empty_json_array_keeps_primary() {
+    let heartbeats = run_and_read_queue(&["--entity", "foo.rs", "--extra-heartbeats"], "[]");
+
+    assert_eq!(heartbeats.len(), 1);
+    assert_eq!(heartbeats[0].entity, "foo.rs");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_extra_heartbeats_empty_stdin_keeps_primary() {
+    let heartbeats = run_and_read_queue(&["--entity", "foo.rs", "--extra-heartbeats"], "");
+
+    assert_eq!(heartbeats.len(), 1);
+    assert_eq!(heartbeats[0].entity, "foo.rs");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_extra_heartbeats_relaxed_parsing_without_id_or_type() {
+    let stdin_batch = r#"[{"entity": "relaxed.rs", "time": 1700000002.0}]"#;
+
+    let heartbeats = run_and_read_queue(&["--extra-heartbeats"], stdin_batch);
+
+    assert_eq!(heartbeats.len(), 1);
+    assert_eq!(heartbeats[0].entity, "relaxed.rs");
+    assert_eq!(heartbeats[0].entity_type, "file");
 }

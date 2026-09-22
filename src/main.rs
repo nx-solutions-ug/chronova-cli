@@ -8,6 +8,57 @@ use chronova_cli::config::Config;
 use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
 use chronova_cli::privacy::HideRule;
 
+/// Applies CLI overrides to the loaded config. CLI beats file beats defaults.
+fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
+    config.api_key = config.get_api_key(cli.key.as_ref());
+    if cli.disable_git_info {
+        config.disable_git_info = true;
+    }
+    if cli.hide_commit_hash {
+        config.hide_commit_hash = true;
+    }
+    if cli.hide_commit_author {
+        config.hide_commit_author = true;
+    }
+    if cli.hide_commit_message {
+        config.hide_commit_message = true;
+    }
+    if cli.hide_repository_url {
+        config.hide_repository_url = true;
+    }
+    // `add_heartbeat_to_queue` takes no `Cli`, only `self.config`, so the flag
+    // has to reach it this way -- CLI > config file > default, matching the
+    // git privacy flags above.
+    if cli.disable_offline {
+        config.disable_offline = true;
+    }
+    // Merge filtering and redaction flags from CLI: a flag the user typed
+    // must win over the config file, and CLI patterns add to the configured
+    // ones rather than replacing them, so a --exclude cannot silently
+    // un-exclude what the config file already hid.
+    if cli.hide_project_folder {
+        config.hide_project_folder = true;
+    }
+    if cli.exclude_unknown_project {
+        config.exclude_unknown_project = true;
+    }
+    if let Some(value) = &cli.hide_file_names {
+        config.hide_file_names = HideRule::parse(value);
+    }
+    if let Some(value) = &cli.hide_project_names {
+        config.hide_project_names = HideRule::parse(value);
+    }
+    if let Some(value) = &cli.hide_branch_names {
+        config.hide_branch_names = HideRule::parse(value);
+    }
+    if let Some(patterns) = &cli.exclude {
+        config.ignore_patterns.extend(patterns.iter().cloned());
+    }
+    if let Some(patterns) = &cli.include {
+        config.include_patterns.extend(patterns.iter().cloned());
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse command line arguments
@@ -28,25 +79,26 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        apply_cli_overrides(&mut config, &cli);
+        config.apply_transport_overrides(&cli);
 
         // Fetch and display today's activity
         if let Err(e) = fetch_today_activity(&config, &cli).await {
@@ -73,73 +125,35 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
-
-        // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
-            eprintln!("Failed to load configuration: {}", e);
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
             process::exit(1);
         });
 
+        // Load configuration
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
+            eprintln!("Failed to load configuration: {}", e);
+            process::exit(1);
+        });
+        config.apply_transport_overrides(&cli);
+
         // Initialize heartbeat manager
-        let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
-        // Merge git privacy flags from CLI
-        if cli.disable_git_info {
-            config.disable_git_info = true;
-        }
-        if cli.hide_commit_hash {
-            config.hide_commit_hash = true;
-        }
-        if cli.hide_commit_author {
-            config.hide_commit_author = true;
-        }
-        if cli.hide_commit_message {
-            config.hide_commit_message = true;
-        }
-        if cli.hide_repository_url {
-            config.hide_repository_url = true;
-        }
-        // Merge filtering and redaction flags from CLI: a flag the user typed
-        // must win over the config file, and CLI patterns add to the configured
-        // ones rather than replacing them, so a --exclude cannot silently
-        // un-exclude what the config file already hid.
-        if cli.hide_project_folder {
-            config.hide_project_folder = true;
-        }
-        if cli.exclude_unknown_project {
-            config.exclude_unknown_project = true;
-        }
-        if let Some(value) = &cli.hide_file_names {
-            config.hide_file_names = HideRule::parse(value);
-        }
-        if let Some(value) = &cli.hide_project_names {
-            config.hide_project_names = HideRule::parse(value);
-        }
-        if let Some(value) = &cli.hide_branch_names {
-            config.hide_branch_names = HideRule::parse(value);
-        }
-        if let Some(patterns) = &cli.exclude {
-            config.ignore_patterns.extend(patterns.iter().cloned());
-        }
-        if let Some(patterns) = &cli.include {
-            config.include_patterns.extend(patterns.iter().cloned());
-        }
-        let heartbeat_manager = HeartbeatManager::new(config);
+        apply_cli_overrides(&mut config, &cli);
+        let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+            eprintln!("Failed to initialize heartbeat manager: {}", e);
+            process::exit(1);
+        });
 
         // Get queue statistics
         match heartbeat_manager.get_queue_stats() {
@@ -237,76 +251,40 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
-
-        // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
-            eprintln!("Failed to load configuration: {}", e);
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
             process::exit(1);
         });
 
+        // Load configuration
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
+            eprintln!("Failed to load configuration: {}", e);
+            process::exit(1);
+        });
+        config.apply_transport_overrides(&cli);
+
         // Initialize heartbeat manager
-        let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
-        // Merge git privacy flags from CLI
-        if cli.disable_git_info {
-            config.disable_git_info = true;
-        }
-        if cli.hide_commit_hash {
-            config.hide_commit_hash = true;
-        }
-        if cli.hide_commit_author {
-            config.hide_commit_author = true;
-        }
-        if cli.hide_commit_message {
-            config.hide_commit_message = true;
-        }
-        if cli.hide_repository_url {
-            config.hide_repository_url = true;
-        }
-        // Merge filtering and redaction flags from CLI: a flag the user typed
-        // must win over the config file, and CLI patterns add to the configured
-        // ones rather than replacing them, so a --exclude cannot silently
-        // un-exclude what the config file already hid.
-        if cli.hide_project_folder {
-            config.hide_project_folder = true;
-        }
-        if cli.exclude_unknown_project {
-            config.exclude_unknown_project = true;
-        }
-        if let Some(value) = &cli.hide_file_names {
-            config.hide_file_names = HideRule::parse(value);
-        }
-        if let Some(value) = &cli.hide_project_names {
-            config.hide_project_names = HideRule::parse(value);
-        }
-        if let Some(value) = &cli.hide_branch_names {
-            config.hide_branch_names = HideRule::parse(value);
-        }
-        if let Some(patterns) = &cli.exclude {
-            config.ignore_patterns.extend(patterns.iter().cloned());
-        }
-        if let Some(patterns) = &cli.include {
-            config.include_patterns.extend(patterns.iter().cloned());
-        }
-        let heartbeat_manager = HeartbeatManager::new(config);
+        apply_cli_overrides(&mut config, &cli);
+        let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+            eprintln!("Failed to initialize heartbeat manager: {}", e);
+            process::exit(1);
+        });
 
-        // Read extra heartbeats from STDIN as JSON array
-        if let Err(e) = process_extra_heartbeats(heartbeat_manager).await {
+        // Read extra heartbeats from STDIN as JSON array. `cli` is passed
+        // through so the primary --entity heartbeat (if any) can be built
+        // and enqueued alongside the stdin batch, rather than dropped.
+        if let Err(e) = process_extra_heartbeats(heartbeat_manager, cli).await {
             eprintln!("Error processing extra heartbeats: {}", e);
             process::exit(1);
         }
@@ -318,16 +296,28 @@ async fn main() -> Result<()> {
     if cli.sync_ai_activity {
         // File-only logging: the calling plugin treats anything this process
         // writes to stdout/stderr as an error, so a successful run stays silent.
-        let _guard = chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            });
+        // json_output = true already makes the logger ignore --log-to-stdout
+        // unconditionally (see setup_logging_with_options' doc comment), but
+        // this call also hardcodes `false` here as belt-and-braces for the
+        // one path that must never emit a byte to stdout; --log-file is still
+        // honored.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            true,
+            cli.log_file.as_deref(),
+            false,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        apply_cli_overrides(&mut config, &cli);
+        config.apply_transport_overrides(&cli);
 
         // Merge filtering and redaction flags from CLI: a flag the user typed
         // must win over the config file, and CLI patterns add to the configured
@@ -382,26 +372,25 @@ async fn main() -> Result<()> {
         .as_ref()
         .is_some_and(|format| format == "json" || format == "raw-json");
 
-    // Setup logging with appropriate output format handling
-    let _guard = if json_output {
-        chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(
-            |e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            },
-        )
-    } else {
-        chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-            eprintln!("Failed to setup logging: {}", e);
-            process::exit(1);
-        })
-    };
+    // Setup logging with appropriate output format handling; --log-file and
+    // --log-to-stdout (cli.rs) are threaded through here.
+    let _guard = chronova_cli::logger::setup_logging_with_options(
+        cli.verbose,
+        json_output,
+        cli.log_file.as_deref(),
+        cli.log_to_stdout,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Failed to setup logging: {}", e);
+        process::exit(1);
+    });
 
     // Load configuration
-    let config = Config::load(&cli.config).unwrap_or_else(|e| {
+    let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
         eprintln!("Failed to load configuration: {}", e);
         process::exit(1);
     });
+    config.apply_transport_overrides(&cli);
 
     // Spawn background auto-update if enabled in config
     if config.auto_update {
@@ -433,73 +422,35 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
-
-        // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
-            eprintln!("Failed to load configuration: {}", e);
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
             process::exit(1);
         });
 
+        // Load configuration
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
+            eprintln!("Failed to load configuration: {}", e);
+            process::exit(1);
+        });
+        config.apply_transport_overrides(&cli);
+
         // Initialize heartbeat manager
-        let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
-        // Merge git privacy flags from CLI
-        if cli.disable_git_info {
-            config.disable_git_info = true;
-        }
-        if cli.hide_commit_hash {
-            config.hide_commit_hash = true;
-        }
-        if cli.hide_commit_author {
-            config.hide_commit_author = true;
-        }
-        if cli.hide_commit_message {
-            config.hide_commit_message = true;
-        }
-        if cli.hide_repository_url {
-            config.hide_repository_url = true;
-        }
-        // Merge filtering and redaction flags from CLI: a flag the user typed
-        // must win over the config file, and CLI patterns add to the configured
-        // ones rather than replacing them, so a --exclude cannot silently
-        // un-exclude what the config file already hid.
-        if cli.hide_project_folder {
-            config.hide_project_folder = true;
-        }
-        if cli.exclude_unknown_project {
-            config.exclude_unknown_project = true;
-        }
-        if let Some(value) = &cli.hide_file_names {
-            config.hide_file_names = HideRule::parse(value);
-        }
-        if let Some(value) = &cli.hide_project_names {
-            config.hide_project_names = HideRule::parse(value);
-        }
-        if let Some(value) = &cli.hide_branch_names {
-            config.hide_branch_names = HideRule::parse(value);
-        }
-        if let Some(patterns) = &cli.exclude {
-            config.ignore_patterns.extend(patterns.iter().cloned());
-        }
-        if let Some(patterns) = &cli.include {
-            config.include_patterns.extend(patterns.iter().cloned());
-        }
-        let heartbeat_manager = HeartbeatManager::new(config);
+        apply_cli_overrides(&mut config, &cli);
+        let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+            eprintln!("Failed to initialize heartbeat manager: {}", e);
+            process::exit(1);
+        });
 
         // Perform manual sync
         println!("Syncing offline heartbeats...");
@@ -523,52 +474,14 @@ async fn main() -> Result<()> {
     }
 
     // Initialize heartbeat manager
-    let mut config = config;
     if let Some(api_url) = &cli.api_url {
         config.api_url = Some(api_url.clone());
     }
-    // Merge git privacy flags from CLI
-    if cli.disable_git_info {
-        config.disable_git_info = true;
-    }
-    if cli.hide_commit_hash {
-        config.hide_commit_hash = true;
-    }
-    if cli.hide_commit_author {
-        config.hide_commit_author = true;
-    }
-    if cli.hide_commit_message {
-        config.hide_commit_message = true;
-    }
-    if cli.hide_repository_url {
-        config.hide_repository_url = true;
-    }
-    // Merge filtering and redaction flags from CLI: a flag the user typed
-    // must win over the config file, and CLI patterns add to the configured
-    // ones rather than replacing them, so a --exclude cannot silently
-    // un-exclude what the config file already hid.
-    if cli.hide_project_folder {
-        config.hide_project_folder = true;
-    }
-    if cli.exclude_unknown_project {
-        config.exclude_unknown_project = true;
-    }
-    if let Some(value) = &cli.hide_file_names {
-        config.hide_file_names = HideRule::parse(value);
-    }
-    if let Some(value) = &cli.hide_project_names {
-        config.hide_project_names = HideRule::parse(value);
-    }
-    if let Some(value) = &cli.hide_branch_names {
-        config.hide_branch_names = HideRule::parse(value);
-    }
-    if let Some(patterns) = &cli.exclude {
-        config.ignore_patterns.extend(patterns.iter().cloned());
-    }
-    if let Some(patterns) = &cli.include {
-        config.include_patterns.extend(patterns.iter().cloned());
-    }
-    let heartbeat_manager = HeartbeatManager::new(config);
+    apply_cli_overrides(&mut config, &cli);
+    let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+        eprintln!("Failed to initialize heartbeat manager: {}", e);
+        process::exit(1);
+    });
 
     // Process the heartbeat
     if let Err(e) = heartbeat_manager.process(cli).await {
@@ -587,7 +500,7 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
     })?;
 
     let base_url = config.get_api_url();
-    let api_client = ApiClient::new(base_url);
+    let api_client = ApiClient::with_transport(base_url, &config.transport_options())?;
     let auth_client = api_client.with_api_key(api_key.clone());
 
     // Fetch today's statusbar data using the correct endpoint
@@ -697,128 +610,142 @@ async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
 /// Process extra heartbeats from STDIN as a JSON array
 async fn process_extra_heartbeats(
     heartbeat_manager: HeartbeatManager,
+    cli: Cli,
 ) -> Result<(), anyhow::Error> {
     use std::io::{self, Read};
     use uuid::Uuid;
+
+    let primary_heartbeat = match cli.entity.clone() {
+        Some(entity) => Some(heartbeat_manager.create_heartbeat(cli, entity).await?),
+        None => None,
+    };
 
     // Read all input from STDIN
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
-    // Debug: Log the raw input to understand the JSON format
-    tracing::debug!(
-        "Raw extra heartbeats input (first 500 chars): {}",
-        if input.len() > 500 {
-            &input[..500]
-        } else {
-            &input
-        }
-    );
+    // Empty stdin means "no extra heartbeats", not malformed JSON; parsing
+    // it would fail and, with --entity set, drop the primary heartbeat too.
+    let mut heartbeats: Vec<chronova_cli::heartbeat::Heartbeat> = if input.trim().is_empty() {
+        Vec::new()
+    } else {
+        // Debug: Log the raw input to understand the JSON format
+        tracing::debug!(
+            "Raw extra heartbeats input (first 500 chars): {}",
+            if input.len() > 500 {
+                &input[..500]
+            } else {
+                &input
+            }
+        );
 
-    // Try to parse as JSON value first to inspect structure
-    match serde_json::from_str::<serde_json::Value>(&input) {
-        Ok(value) => {
-            tracing::debug!("Parsed JSON value: {}", value);
+        // Try to parse as JSON value first to inspect structure
+        match serde_json::from_str::<serde_json::Value>(&input) {
+            Ok(value) => {
+                tracing::debug!("Parsed JSON value: {}", value);
 
-            // Check if it's an array
-            if let serde_json::Value::Array(arr) = &value {
-                tracing::debug!("JSON is an array with {} elements", arr.len());
+                // Check if it's an array
+                if let serde_json::Value::Array(arr) = &value {
+                    tracing::debug!("JSON is an array with {} elements", arr.len());
 
-                // Log first element structure for debugging
-                if let Some(first) = arr.first() {
-                    tracing::debug!("First element structure: {}", first);
+                    // Log first element structure for debugging
+                    if let Some(first) = arr.first() {
+                        tracing::debug!("First element structure: {}", first);
+                    }
                 }
             }
+            Err(e) => {
+                tracing::error!("Failed to parse as JSON value: {}", e);
+            }
         }
-        Err(e) => {
-            tracing::error!("Failed to parse as JSON value: {}", e);
-        }
-    }
 
-    // Parse the JSON array of heartbeats, but handle missing id field
-    // External heartbeats (from WakaTime extension) may not include an id field
-    let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> =
-        serde_json::from_str(&input);
+        // Parse the JSON array of heartbeats, but handle missing id field
+        // External heartbeats (from WakaTime extension) may not include an id field
+        let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> =
+            serde_json::from_str(&input);
 
-    let heartbeats = match heartbeats_result {
-        Ok(heartbeats) => heartbeats,
-        Err(e) => {
-            // If parsing fails due to missing id field, try parsing as a different structure
-            // that doesn't require id, then add the id field manually
-            tracing::warn!("Failed to parse heartbeats with strict validation: {}", e);
-            tracing::info!("Attempting to parse with relaxed validation for external heartbeats");
+        match heartbeats_result {
+            Ok(heartbeats) => heartbeats,
+            Err(e) => {
+                // If parsing fails due to missing id field, try parsing as a different structure
+                // that doesn't require id, then add the id field manually
+                tracing::warn!("Failed to parse heartbeats with strict validation: {}", e);
+                tracing::info!(
+                    "Attempting to parse with relaxed validation for external heartbeats"
+                );
 
-            // Define a relaxed heartbeat structure that doesn't require id or type
-            // This matches the WakaTime ExtraHeartbeat format where most fields are optional
-            #[derive(Debug, serde::Deserialize)]
-            struct RelaxedHeartbeat {
-                pub entity: String,
-                #[serde(rename = "type", default = "default_entity_type")]
-                pub entity_type: String,
-                pub time: f64,
-                pub project: Option<String>,
-                pub branch: Option<String>,
-                pub language: Option<String>,
-                #[serde(default)]
-                pub is_write: bool,
-                pub lines: Option<i32>,
-                pub lineno: Option<i32>,
-                pub cursorpos: Option<i32>,
-                pub user_agent: Option<String>,
-                pub category: Option<String>,
-                pub machine: Option<String>,
-                #[serde(default)]
-                pub dependencies: Vec<String>,
+                // Define a relaxed heartbeat structure that doesn't require id or type
+                // This matches the WakaTime ExtraHeartbeat format where most fields are optional
+                #[derive(Debug, serde::Deserialize)]
+                struct RelaxedHeartbeat {
+                    pub entity: String,
+                    #[serde(rename = "type", default = "default_entity_type")]
+                    pub entity_type: String,
+                    pub time: f64,
+                    pub project: Option<String>,
+                    pub branch: Option<String>,
+                    pub language: Option<String>,
+                    #[serde(default)]
+                    pub is_write: bool,
+                    pub lines: Option<i32>,
+                    pub lineno: Option<i32>,
+                    pub cursorpos: Option<i32>,
+                    pub user_agent: Option<String>,
+                    pub category: Option<String>,
+                    pub machine: Option<String>,
+                    #[serde(default)]
+                    pub dependencies: Vec<String>,
+                }
+
+                fn default_entity_type() -> String {
+                    "file".to_string()
+                }
+
+                // Parse as relaxed heartbeats
+                let relaxed_heartbeats: Vec<RelaxedHeartbeat> = serde_json::from_str(&input)
+                    .map_err(|e| {
+                        tracing::error!("Failed to parse even with relaxed validation: {}", e);
+                        anyhow::anyhow!("Failed to parse extra heartbeats: {}", e)
+                    })?;
+
+                // Convert to proper heartbeats by adding id field
+                let mut heartbeats = Vec::new();
+                for relaxed in relaxed_heartbeats {
+                    let heartbeat = chronova_cli::heartbeat::Heartbeat {
+                        id: Uuid::new_v4().to_string(), // Generate UUID for missing id
+                        entity: relaxed.entity,
+                        entity_type: relaxed.entity_type,
+                        time: relaxed.time,
+                        project: relaxed.project,
+                        branch: relaxed.branch,
+                        language: relaxed.language,
+                        is_write: relaxed.is_write,
+                        lines: relaxed.lines,
+                        lineno: relaxed.lineno,
+                        cursorpos: relaxed.cursorpos,
+                        user_agent: Some(chronova_cli::user_agent::generate_user_agent(
+                            relaxed.user_agent.as_deref(),
+                        )),
+                        category: relaxed.category,
+                        machine: relaxed.machine,
+                        editor: None,
+                        operating_system: None,
+                        commit_hash: None,
+                        commit_author: None,
+                        commit_message: None,
+                        repository_url: None,
+                        dependencies: relaxed.dependencies,
+                        ai: Default::default(),
+                    };
+                    heartbeats.push(heartbeat);
+                }
+
+                tracing::info!(
+                    "Successfully parsed {} external heartbeats with generated IDs",
+                    heartbeats.len()
+                );
+                heartbeats
             }
-
-            fn default_entity_type() -> String {
-                "file".to_string()
-            }
-
-            // Parse as relaxed heartbeats
-            let relaxed_heartbeats: Vec<RelaxedHeartbeat> =
-                serde_json::from_str(&input).map_err(|e| {
-                    tracing::error!("Failed to parse even with relaxed validation: {}", e);
-                    anyhow::anyhow!("Failed to parse extra heartbeats: {}", e)
-                })?;
-
-            // Convert to proper heartbeats by adding id field
-            let mut heartbeats = Vec::new();
-            for relaxed in relaxed_heartbeats {
-                let heartbeat = chronova_cli::heartbeat::Heartbeat {
-                    id: Uuid::new_v4().to_string(), // Generate UUID for missing id
-                    entity: relaxed.entity,
-                    entity_type: relaxed.entity_type,
-                    time: relaxed.time,
-                    project: relaxed.project,
-                    branch: relaxed.branch,
-                    language: relaxed.language,
-                    is_write: relaxed.is_write,
-                    lines: relaxed.lines,
-                    lineno: relaxed.lineno,
-                    cursorpos: relaxed.cursorpos,
-                    user_agent: Some(chronova_cli::user_agent::generate_user_agent(
-                        relaxed.user_agent.as_deref(),
-                    )),
-                    category: relaxed.category,
-                    machine: relaxed.machine,
-                    editor: None,
-                    operating_system: None,
-                    commit_hash: None,
-                    commit_author: None,
-                    commit_message: None,
-                    repository_url: None,
-                    dependencies: relaxed.dependencies,
-                    ai: Default::default(),
-                };
-                heartbeats.push(heartbeat);
-            }
-
-            tracing::info!(
-                "Successfully parsed {} external heartbeats with generated IDs",
-                heartbeats.len()
-            );
-            heartbeats
         }
     };
 
@@ -827,11 +754,82 @@ async fn process_extra_heartbeats(
         heartbeats.len()
     );
 
+    heartbeats.extend(primary_heartbeat);
+
     for heartbeat in &heartbeats {
-        heartbeat_manager.add_heartbeat_to_queue(heartbeat.clone())?;
+        heartbeat_manager
+            .add_heartbeat_to_queue(heartbeat.clone())
+            .await?;
     }
 
-    tracing::info!("Successfully queued {} extra heartbeats", heartbeats.len());
+    // Neutral wording: with --disable-offline these were sent directly rather
+    // than queued, and add_heartbeat_to_queue doesn't expose which happened.
+    tracing::info!(
+        "Successfully processed {} extra heartbeats",
+        heartbeats.len()
+    );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod apply_cli_overrides_tests {
+    use super::*;
+
+    #[test]
+    fn cli_key_wins_over_config_file_key() {
+        let cli = Cli::parse_from(["chronova-cli", "--key", "cli_key"]);
+        let mut config = Config {
+            api_key: Some("file_key".to_string()),
+            ..Default::default()
+        };
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.get_api_key(None), Some("cli_key".to_string()));
+    }
+
+    #[test]
+    fn config_file_key_used_when_cli_key_unset() {
+        let cli = Cli::parse_from(["chronova-cli"]);
+        let mut config = Config {
+            api_key: Some("file_key".to_string()),
+            ..Default::default()
+        };
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.get_api_key(None), Some("file_key".to_string()));
+    }
+
+    #[test]
+    fn no_key_when_neither_cli_nor_config_set() {
+        let cli = Cli::parse_from(["chronova-cli"]);
+        let mut config = Config::default();
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.get_api_key(None), None);
+    }
+
+    #[test]
+    fn all_git_privacy_flags_still_applied() {
+        let cli = Cli::parse_from([
+            "chronova-cli",
+            "--disable-git-info",
+            "--hide-commit-hash",
+            "--hide-commit-author",
+            "--hide-commit-message",
+            "--hide-repository-url",
+        ]);
+        let mut config = Config::default();
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert!(config.disable_git_info);
+        assert!(config.hide_commit_hash);
+        assert!(config.hide_commit_author);
+        assert!(config.hide_commit_message);
+        assert!(config.hide_repository_url);
+    }
 }

@@ -3,6 +3,8 @@ use dirs::home_dir;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+use crate::api::{TransportOptions, DEFAULT_TIMEOUT_SECONDS};
+use crate::cli::Cli;
 use crate::privacy::HideRule;
 use crate::sync::SyncConfig;
 
@@ -22,6 +24,8 @@ pub struct Config {
     pub api_url: Option<String>,
     pub debug: bool,
     pub proxy: Option<String>,
+    /// Seconds to wait for an API request; `None` means the built-in default.
+    pub timeout: Option<u64>,
     pub ignore_patterns: Vec<String>,
     pub hide_file_names: HideRule,
     pub hide_project_names: HideRule,
@@ -75,6 +79,9 @@ impl Config {
                 .and_then(|s| s.as_ref().and_then(|v| v.parse().ok()))
                 .unwrap_or(false),
             proxy: settings.get("proxy").and_then(|v| v.clone()),
+            timeout: settings
+                .get("timeout")
+                .and_then(|s| s.as_ref().and_then(|v| v.parse().ok())),
             hide_file_names: settings
                 .get("hide_file_names")
                 .and_then(|s| s.as_ref().and_then(|v| v.parse::<bool>().ok()))
@@ -294,6 +301,50 @@ impl Config {
 
         sync_config
     }
+
+    /// The transport settings the HTTP client should be built with.
+    pub fn transport_options(&self) -> TransportOptions {
+        TransportOptions {
+            timeout: std::time::Duration::from_secs(
+                self.timeout.unwrap_or(DEFAULT_TIMEOUT_SECONDS),
+            ),
+            proxy: non_blank(&self.proxy),
+            no_ssl_verify: self.no_ssl_verify,
+            ssl_certs_file: non_blank(&self.ssl_certs_file),
+        }
+    }
+
+    /// Let the transport flags override what the config file said.
+    ///
+    /// Only flags the user actually passed take effect, so the precedence stays
+    /// CLI > file > default.
+    pub fn apply_transport_overrides(&mut self, cli: &Cli) {
+        if let Some(timeout) = cli.timeout {
+            self.timeout = Some(timeout);
+        }
+        if let Some(proxy) = &cli.proxy {
+            self.proxy = Some(proxy.clone());
+        }
+        if cli.no_ssl_verify {
+            self.no_ssl_verify = true;
+        }
+        if let Some(certs_file) = &cli.ssl_certs_file {
+            self.ssl_certs_file = Some(certs_file.clone());
+        }
+    }
+}
+
+/// Treat a blank setting as unset.
+///
+/// `proxy =` with nothing after it is a common way to turn a setting off in
+/// `~/.chronova.cfg`, and an empty string is neither a usable proxy URL nor a
+/// usable certificate path.
+fn non_blank(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 impl Default for Config {
@@ -303,6 +354,7 @@ impl Default for Config {
             api_url: Some("https://chronova.dev/api/v1".to_string()),
             debug: false,
             proxy: None,
+            timeout: None,
             ignore_patterns: vec![
                 "COMMIT_EDITMSG$".to_string(),
                 "PULLREQ_EDITMSG$".to_string(),
@@ -339,6 +391,56 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_transport_options_ignore_blank_settings() {
+        // `proxy =` with nothing after it means "no proxy", not "proxy \"\"".
+        let config = Config {
+            proxy: Some("   ".to_string()),
+            ssl_certs_file: Some(String::new()),
+            ..Config::default()
+        };
+
+        let options = config.transport_options();
+        assert_eq!(options.proxy, None);
+        assert_eq!(options.ssl_certs_file, None);
+        assert_eq!(
+            options.timeout,
+            std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECONDS)
+        );
+    }
+
+    #[test]
+    fn test_transport_overrides_follow_cli_over_file() {
+        use clap::Parser;
+
+        let mut config = Config {
+            timeout: Some(90),
+            proxy: Some("http://from-file:8080".to_string()),
+            ..Config::default()
+        };
+
+        // Nothing passed: the file keeps its say.
+        config.apply_transport_overrides(&Cli::parse_from(["chronova-cli"]));
+        assert_eq!(config.timeout, Some(90));
+        assert_eq!(config.proxy, Some("http://from-file:8080".to_string()));
+
+        config.apply_transport_overrides(&Cli::parse_from([
+            "chronova-cli",
+            "--timeout",
+            "5",
+            "--proxy",
+            "http://from-cli:3128",
+            "--no-ssl-verify",
+        ]));
+        assert_eq!(config.timeout, Some(5));
+        assert_eq!(config.proxy, Some("http://from-cli:3128".to_string()));
+        assert!(config.no_ssl_verify);
+        assert_eq!(
+            config.transport_options().timeout,
+            std::time::Duration::from_secs(5)
+        );
+    }
 
     #[test]
     fn test_default_config() {

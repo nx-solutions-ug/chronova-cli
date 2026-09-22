@@ -18,7 +18,34 @@ pub fn setup_logging_with_output_format(
     verbose: bool,
     json_output: bool,
 ) -> Result<WorkerGuard, io::Error> {
-    let log_file = get_log_file_path()?;
+    setup_logging_with_options(verbose, json_output, None, false)
+}
+
+/// `json_output` forces file-only logging, unconditionally, for any path whose
+/// stdout is machine-parsed (`--output json`/`raw-json`, and `--sync-ai-activity`
+/// via the hardcoded `true` its `main.rs` call site passes). `log_to_stdout`
+/// (`--log-to-stdout`) is deliberately **not** able to override that: a caller
+/// mixing `--log-to-stdout` into a machine-readable invocation must not get log
+/// lines interleaved into the document it's trying to parse — same failure
+/// class as `--sync-ai-activity`'s plugin, just a different victim. Every other
+/// (human-facing) path already includes the stdout layer unconditionally,
+/// flag or no flag (see AGENTS.md's logging Landmine — out of scope here), so
+/// `log_to_stdout` has no code path where it currently changes the outcome; it
+/// stays a real, threaded-through parameter rather than being silently dropped,
+/// so a future machine-readable output has an unambiguous switch to opt into
+/// the same protection. `log_file` overrides the default `~/.chronova.log`
+/// destination (`--log-file`) and applies everywhere, unconditionally.
+pub fn setup_logging_with_options(
+    verbose: bool,
+    json_output: bool,
+    log_file: Option<&str>,
+    log_to_stdout: bool,
+) -> Result<WorkerGuard, io::Error> {
+    // Not consulted below — see the doc comment above for why machine-readable
+    // output must win unconditionally regardless of this flag's value.
+    let _ = log_to_stdout;
+
+    let log_file = resolve_log_file_path(log_file)?;
 
     // Create log file directory if it doesn't exist
     if let Some(parent) = log_file.parent() {
@@ -46,21 +73,11 @@ pub fn setup_logging_with_output_format(
         .with_timer(ChronoLocalTimer)
         .with_filter(env_filter.clone());
 
-    // Handle JSON output mode - completely disable stdout logging
     if json_output {
-        // When JSON output is requested, we must ensure stdout is completely clean
-        // Only set up file logging and avoid any stdout contamination
+        // Only set up file logging and avoid any stdout contamination.
         let registry = tracing_subscriber::registry().with(file_layer);
-
-        // Set the global default subscriber
-        if tracing::subscriber::set_global_default(registry).is_err() {
-            // If we can't set the global default, a subscriber is already set
-            // We need to ensure it doesn't log to stdout for JSON output
-            // For now, we rely on the fact that no stdout layer was added
-        }
-        // No logging messages should be output to stdout in JSON mode
+        let _ = tracing::subscriber::set_global_default(registry);
     } else {
-        // Normal mode - include both file and stdout logging
         let stdout_layer = fmt::layer()
             .with_writer(io::stdout)
             .with_ansi(true)
@@ -71,16 +88,17 @@ pub fn setup_logging_with_output_format(
             .with(file_layer)
             .with(stdout_layer);
 
-        // Check if a subscriber is already set to avoid "SetGlobalDefaultError"
-        if tracing::subscriber::set_global_default(registry).is_err() {
-            // If we can't set the global default, it means one is already set
-            // Don't log initialization messages to stdout to keep output clean
-        } else {
-            // Don't log initialization messages to stdout to keep output clean
-        }
+        let _ = tracing::subscriber::set_global_default(registry);
     }
 
     Ok(guard)
+}
+
+fn resolve_log_file_path(log_file: Option<&str>) -> Result<PathBuf, io::Error> {
+    match log_file {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => get_log_file_path(),
+    }
 }
 
 fn get_log_file_path() -> Result<PathBuf, io::Error> {
@@ -107,6 +125,18 @@ mod tests {
     #[test]
     fn test_log_file_path() {
         let path = get_log_file_path().unwrap();
+        assert!(path.to_string_lossy().ends_with(".chronova.log"));
+    }
+
+    #[test]
+    fn resolve_log_file_path_honors_override() {
+        let path = resolve_log_file_path(Some("/tmp/custom-chronova.log")).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/custom-chronova.log"));
+    }
+
+    #[test]
+    fn resolve_log_file_path_defaults_to_chronova_log() {
+        let path = resolve_log_file_path(None).unwrap();
         assert!(path.to_string_lossy().ends_with(".chronova.log"));
     }
 
