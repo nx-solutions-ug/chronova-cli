@@ -31,7 +31,7 @@ useful for testing against real data without touching live state.
 | Path | Written by |
 |---|---|
 | `~/.chronova.cfg` | user/config; `--config` overrides (`cli.rs:54`) |
-| `~/.chronova.log` | `logger.rs:90` |
+| `~/.chronova.log` | `logger.rs:108` |
 | `~/.chronova/queue.db` | `queue.rs:716` (WAL mode) |
 | `~/.chronova-internal.cfg` | `ai_sync.rs:277` — `[internal] ai_logs_last_parsed_at` |
 | `~/.chronova/ai-sync.lock` | `ai_sync.rs:271` — advisory lock, released on drop |
@@ -85,7 +85,7 @@ useful for testing against real data without touching live state.
 3. Document in help text. The clap doc comment *is* the help text
 
 If the flag must work without `--entity`, handle it **before** the guard at
-`main.rs:295` (`cli.entity.is_none() && cli.sync_offline_activity.is_none()`),
+`main.rs:308` (`cli.entity.is_none() && cli.sync_offline_activity.is_none()`),
 which prints an error and exits. `--sync-ai-activity` sits directly above it
 for that reason.
 
@@ -269,7 +269,7 @@ The plugin (>= 4.1.0) does no transcript parsing of its own. It rate-limits to
 60s and executes the CLI with exactly three arguments — `--sync-ai-activity`,
 `--plugin "claude-code/<ver> claude-code-wakatime/<ver>"` and
 `--project-folder <cwd>` — then **logs any stdout or stderr it receives as an
-error**. A successful run must therefore be byte-silent; `main.rs:264` selects
+error**. A successful run must therefore be byte-silent; `main.rs:278` selects
 file-only logging for this reason. If you add output to that path, every
 session's `~/.wakatime/claude-code.log` fills with false errors.
 
@@ -282,7 +282,7 @@ your own sessions, including this one. Consequences worth knowing:
 - Project attribution comes from each transcript line's own `cwd`, not from
   `--project-folder`, which is only a fallback. That is what keeps concurrent
   sessions in different repos labelled correctly.
-- The API mints its own heartbeat ids (`heartbeat.rs:254` generates a
+- The API mints its own heartbeat ids (`heartbeat.rs:263` generates a
   client-side UUID that the server discards and replaces with
   `hb_<ts>_<rand>`), but the route de-duplicates on `(userId, time, entity)`.
   `ai_sync.rs:836` derives `time` from the transcript's own timestamp, which
