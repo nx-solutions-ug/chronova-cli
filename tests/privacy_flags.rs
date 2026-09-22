@@ -217,6 +217,78 @@ fn an_invalid_pattern_does_not_abort_the_run() {
     );
 }
 
+#[test]
+fn hide_project_folder_warns_when_there_is_nothing_to_strip() {
+    let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
+    run.invoke(&["--hide-project-folder"]);
+
+    assert!(
+        run.log().contains("hide_project_folder: no project root"),
+        "a privacy flag that could not act must say so: {}",
+        run.log()
+    );
+}
+
+/// A git worktree resolves its *project* to the main repository, which is not
+/// an ancestor of the file being edited. The folder to strip is the worktree's
+/// own root, or the flag silently sends the whole path.
+#[tokio::test]
+async fn hide_project_folder_strips_the_worktree_root_not_the_main_repo() {
+    let mock_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/users/current/heartbeats"))
+        .respond_with(ResponseTemplate::new(201).set_body_string("{}"))
+        .mount(&mock_server)
+        .await;
+
+    let repos = tempfile::tempdir().expect("temp dir");
+    let main_repo = repos.path().join("main");
+    fs::create_dir(&main_repo).expect("main repo dir");
+    let repo = git2::Repository::init(&main_repo).expect("init repo");
+    fs::write(main_repo.join("README.md"), "# main\n").expect("write readme");
+    let mut index = repo.index().expect("index");
+    index.add_path(Path::new("README.md")).expect("add readme");
+    let tree_oid = index.write_tree().expect("write tree");
+    drop(index);
+    let tree = repo.find_tree(tree_oid).expect("tree");
+    let sig = git2::Signature::now("Test", "test@example.com").expect("signature");
+    repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+        .expect("commit");
+    drop(tree);
+
+    let worktree_path = repos.path().join("feature");
+    repo.worktree("feature", &worktree_path, None)
+        .expect("create worktree");
+    fs::create_dir_all(worktree_path.join("src")).expect("src dir");
+    let entity = worktree_path.join("src").join("main.rs");
+    fs::write(&entity, "fn main() {}").expect("write entity");
+
+    let run = Run::new(&format!("api_url = {}", mock_server.uri()), "unused.rs");
+    let mut cmd = Command::cargo_bin("chronova-cli").expect("binary built");
+    cmd.env("HOME", run.home.path())
+        .arg("--config")
+        .arg(run.home.path().join(".chronova.cfg"))
+        .arg("--hide-project-folder")
+        .arg("--entity")
+        .arg(&entity);
+    cmd.assert().success();
+
+    let requests = mock_server
+        .received_requests()
+        .await
+        .expect("requests recorded");
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("heartbeat json");
+    let heartbeat = if body.is_array() {
+        body[0].clone()
+    } else {
+        body
+    };
+
+    assert_eq!(heartbeat["entity"].as_str(), Some("src/main.rs"));
+}
+
 #[tokio::test]
 async fn hide_project_folder_makes_the_entity_relative() {
     let mock_server = MockServer::start().await;

@@ -130,7 +130,7 @@ pub struct Cli {
     #[arg(long)]
     pub exclude: Option<Vec<String>>,
 
-    /// Filename patterns to log. When used in combination with --exclude, files matching include will still be logged. POSIX regex syntax. Can be used more than once.
+    /// Filename patterns to log. When set, only matching files are logged. When used in combination with --exclude, files matching include will still be logged. POSIX regex syntax. Can be used more than once.
     #[arg(long)]
     pub include: Option<Vec<String>>,
 

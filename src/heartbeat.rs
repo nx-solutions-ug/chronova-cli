@@ -197,11 +197,11 @@ impl HeartbeatManager {
 
         // Only pay for project detection here when a flag actually needs the
         // root; `create_heartbeat` detects it again for the project name.
+        // `containing_project_root` rather than `detect_project`, because the
+        // latter resolves a worktree to its main repository, which is not a
+        // prefix of the entity and so would strip nothing at all.
         let project_root = if self.sanitizer.strips_project_folder() {
-            self.collector
-                .detect_project(&entity)
-                .await
-                .map(|info| info.root)
+            self.collector.containing_project_root(&entity)
         } else {
             None
         };

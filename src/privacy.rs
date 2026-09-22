@@ -205,8 +205,15 @@ impl Sanitizer {
         let entity = heartbeat.entity.clone();
 
         if self.hide_project_folder {
-            if let Some(relative) = project_relative(&heartbeat.entity, project_root) {
-                heartbeat.entity = relative;
+            match project_relative(&heartbeat.entity, project_root) {
+                Some(relative) => heartbeat.entity = relative,
+                // A privacy flag that could not act must say so rather than
+                // leave the user believing the path was shortened.
+                None if heartbeat.entity_type == "file" => tracing::warn!(
+                    "hide_project_folder: no project root below {:?}, sending the path as is",
+                    heartbeat.entity
+                ),
+                None => {}
             }
         }
 
