@@ -123,12 +123,18 @@ impl HeartbeatManager {
 
     /// Create a HeartbeatManager with a custom queue (useful for testing with isolated queues).
     ///
-    /// Construction never touches the queue's contents: a heartbeat queued by
-    /// a previous invocation must still be there when the next invocation
-    /// constructs its own manager. Age-based retention is handled separately,
-    /// from the sync/flush path (see `enforce_retention`), driven by the
-    /// configured `sync_retention_days` rather than run unconditionally here.
-    pub fn new_with_queue(config: Config, queue: Queue) -> Self {
+    /// Construction never removes anything from the queue: a heartbeat
+    /// queued by a previous invocation must still be there when the next
+    /// invocation constructs its own manager. Age-based retention while the
+    /// manager is alive is handled separately, from the sync/flush path
+    /// (see `enforce_retention`). What construction *does* do is set the
+    /// queue's own `retention_days` (`Queue::set_retention_days`) from the
+    /// configured `sync_retention_days`, so that if the queue is dropped
+    /// without ever reaching `process_queue` — e.g. `--extra-heartbeats`,
+    /// which only enqueues — `Queue`'s own `Drop` prunes at the same
+    /// configured window instead of a hardcoded one.
+    pub fn new_with_queue(config: Config, mut queue: Queue) -> Self {
+        queue.set_retention_days(config.sync_config.retention_days);
         let api_client = ApiClient::new(config.get_api_url());
         let authenticated_api_client = config
             .get_api_key(None)
@@ -842,8 +848,17 @@ mod tests {
     /// A `sync_retention_days` of `0` must not be treated as
     /// `cleanup_old_entries(0)`'s "delete everything" special case — that
     /// special case is reserved for an explicit "clear the queue" caller.
+    /// This must hold both while `enforce_retention` runs during the
+    /// manager's life *and* when its `Queue` actually drops
+    /// (`Queue::set_retention_days` is what guards the drop path), so the
+    /// queue is dropped for real inside this test — via the inner scope
+    /// below — rather than kept alive until the assertion, which would only
+    /// prove the `enforce_retention` half of the guard.
     #[test]
     fn test_retention_with_zero_configured_days_does_not_wipe_the_queue() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("zero_retention_queue.db");
+
         let config = Config {
             sync_config: crate::sync::SyncConfig {
                 retention_days: 0,
@@ -851,26 +866,42 @@ mod tests {
             },
             ..Default::default()
         };
-        let (manager, _temp_dir) = create_test_manager(config);
 
-        let old = sample_heartbeat("old-entry-with-zero-retention");
-        manager
-            .queue
-            .add(old.clone())
-            .expect("Failed to queue heartbeat");
-        manager
-            .queue
-            .backdate_for_test(&old.id, 365)
-            .expect("Failed to backdate heartbeat");
+        {
+            let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+            let manager = HeartbeatManager::new_with_queue(config, queue);
 
-        manager.enforce_retention();
+            let old = sample_heartbeat("old-entry-with-zero-retention");
+            manager
+                .queue
+                .add(old.clone())
+                .expect("Failed to queue heartbeat");
+            manager
+                .queue
+                .backdate_for_test(&old.id, 365)
+                .expect("Failed to backdate heartbeat");
 
-        let stats = manager
-            .get_queue_stats()
-            .expect("get_queue_stats should return Ok");
+            manager.enforce_retention();
+
+            let stats = manager
+                .get_queue_stats()
+                .expect("get_queue_stats should return Ok");
+            assert_eq!(
+                stats.total, 1,
+                "retention_days == 0 must skip cleanup, not delete the whole queue"
+            );
+
+            // `manager`, and the `Queue` it owns, drop at the end of this
+            // block. That's the part of the property this test exists to
+            // pin: it isn't enough for `enforce_retention` to skip cleanup —
+            // `Drop` must too.
+        }
+
+        let reopened = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let count = reopened.count().expect("count should return Ok");
         assert_eq!(
-            stats.total, 1,
-            "retention_days == 0 must skip cleanup, not delete the whole queue"
+            count, 1,
+            "Queue::drop must not wipe the queue when retention_days == 0"
         );
     }
 

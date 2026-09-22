@@ -147,8 +147,10 @@ pub async fn sync_ai_activity(cli: &Cli, config: Config) -> Result<usize> {
     // On a total failure, take the batch back out and leave the cutoff alone so
     // the next run re-derives it from the transcripts. Transcripts are the
     // real durable store: the queue only survives for `sync_retention_days`
-    // (`config.rs:275`, default 7) before `process_queue`'s retention cleanup
-    // prunes it (see AGENTS.md's Landmines section). Re-parsing is cheap.
+    // (`config.rs:275`, default 7) before retention cleanup prunes it — from
+    // `process_queue` on the sync/flush path, or from `Queue`'s own `Drop`
+    // as a fallback for callers that never reach `process_queue` at all
+    // (see AGENTS.md's Landmines section). Re-parsing is cheap.
     // A partial success keeps its rows and advances, so retries cannot
     // duplicate the heartbeats that did land.
     match outcome {

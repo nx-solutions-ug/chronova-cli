@@ -123,18 +123,24 @@ payload while costing each literal a single line.
 Two behaviours that are easy to trip over and hard to notice:
 
 - **The queue survives construction, but not forever.** `HeartbeatManager::new`
-  (`heartbeat.rs:119`) delegates to `new_with_queue` (`heartbeat.rs:131`),
-  the single construction path, and neither touches the queue's contents — a
-  heartbeat queued by a previous invocation is still there when the next
-  invocation constructs its own manager. Age-based pruning instead happens on
-  the sync/flush path: `process_queue` calls `enforce_retention`
-  (`heartbeat.rs:152`) on every run, which runs
-  `queue.cleanup_old_entries(sync_retention_days)` (`config.rs:275`, default
-  7). `max_age_days == 0` is still the special case that runs
-  `DELETE FROM heartbeats` (`queue.rs:314-317`), so never call
-  `cleanup_old_entries(0)` from construction or the sync/flush path — that is
-  the bug this landmine used to describe. An explicit "clear the queue"
-  caller, and the test suite, may still call it with `0` deliberately.
+  (`heartbeat.rs:119`) delegates to `new_with_queue` (`heartbeat.rs:136`),
+  the single construction path, and neither removes anything from the queue —
+  a heartbeat queued by a previous invocation is still there when the next
+  invocation constructs its own manager. Retention is enforced from two
+  places, both driven by the same configured `sync_retention_days`
+  (`config.rs:275`, default 7): `process_queue` calls `enforce_retention`
+  (`heartbeat.rs:158`) on every sync/flush, and `new_with_queue` also calls
+  `Queue::set_retention_days` so `Drop for Queue` (`queue.rs:758`) prunes at
+  the same window if a queue is ever dropped without reaching
+  `process_queue` at all — e.g. `--extra-heartbeats`, which only enqueues
+  and never syncs. `max_age_days == 0` is still the special case that runs
+  `DELETE FROM heartbeats` (`queue.rs:314-317`), so neither path may ever
+  reach it with a literal `0`: a configured `0` is treated as "skip
+  retention" instead (`enforce_retention`'s own guard on the sync/flush
+  side; `set_retention_days` storing `None` on the drop side) — that
+  conflation is the bug this landmine used to describe. An explicit "clear
+  the queue" caller, and the test suite, may still call
+  `cleanup_old_entries(0)` deliberately.
 
 - **`tracing` at INFO goes to stdout, not just the log file.** `setup_logging`
   adds a stdout layer in normal mode (`logger.rs:63-65`) and the default level
