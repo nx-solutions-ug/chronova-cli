@@ -169,8 +169,10 @@ impl HeartbeatManager {
             return Ok(());
         }
 
-        // --disable-offline must be read before create_heartbeat consumes `cli`.
-        let disable_offline = cli.disable_offline;
+        // --disable-offline (CLI > config file > default, matching the
+        // disable_git_info/hide_* merge pattern below in main.rs) must be
+        // read before create_heartbeat consumes `cli`.
+        let disable_offline = self.config.disable_offline || cli.disable_offline;
 
         // Create heartbeat from CLI arguments
         let heartbeat = self.create_heartbeat(cli, entity).await?;
@@ -185,18 +187,25 @@ impl HeartbeatManager {
             } else {
                 self.api_client.send_heartbeat(&heartbeat).await
             };
-            match send_result {
+            return match send_result {
                 Ok(_) => {
                     tracing::debug!("Heartbeat sent directly with offline queueing disabled");
+                    Ok(())
                 }
                 Err(e) => {
+                    // A caller must be able to tell "sent" from "silently
+                    // discarded", so this is a hard error (non-zero exit via
+                    // main.rs), not a warn-and-continue.
                     tracing::warn!(
                         "Heartbeat send failed with --disable-offline set; dropping instead of queueing: {}",
                         e
                     );
+                    Err(anyhow::anyhow!(
+                        "heartbeat send failed with --disable-offline set (dropped instead of queued): {}",
+                        e
+                    ))
                 }
-            }
-            return Ok(());
+            };
         }
 
         // Use offline-first strategy: always queue first, then try to sync
@@ -694,12 +703,41 @@ impl HeartbeatManagerExt for HeartbeatManager {
 }
 
 impl HeartbeatManager {
-    /// Add a heartbeat directly to the queue for offline processing
-    pub fn add_heartbeat_to_queue(&self, heartbeat: Heartbeat) -> anyhow::Result<()> {
+    /// Add a heartbeat to the queue for offline processing, or — when
+    /// `--disable-offline` is set (`self.config.disable_offline`, merged from
+    /// CLI/config by the caller the same way `process()` does) — send it
+    /// directly and drop it on failure instead of queueing. Used by
+    /// `--extra-heartbeats`, which previously queued unconditionally and
+    /// never read this flag at all.
+    pub async fn add_heartbeat_to_queue(&self, heartbeat: Heartbeat) -> anyhow::Result<()> {
         // Check if entity should be ignored
         if self.should_ignore_entity(&heartbeat.entity) {
             tracing::debug!("Ignoring entity: {}", heartbeat.entity);
             return Ok(());
+        }
+
+        if self.config.disable_offline {
+            let send_result = if let Some(auth_client) = &self.authenticated_api_client {
+                auth_client.send_heartbeat(&heartbeat).await
+            } else {
+                self.api_client.send_heartbeat(&heartbeat).await
+            };
+            return match send_result {
+                Ok(_) => {
+                    tracing::debug!("Heartbeat sent directly with offline queueing disabled");
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Heartbeat send failed with --disable-offline set; dropping instead of queueing: {}",
+                        e
+                    );
+                    Err(anyhow::anyhow!(
+                        "heartbeat send failed with --disable-offline set (dropped instead of queued): {}",
+                        e
+                    ))
+                }
+            };
         }
 
         // Add heartbeat to queue

@@ -218,7 +218,7 @@ pub struct Cli {
     #[arg(long)]
     pub internal_config: Option<String>,
 
-    /// If enabled, logs will go to stdout. Will overwrite logfile configs.
+    /// Intended to send logs to stdout instead of the log file (upstream semantics). Has no effect today: file logging always happens, and this is ignored outright on any machine-readable output path. [not yet implemented]
     #[arg(long)]
     pub log_to_stdout: bool,
 

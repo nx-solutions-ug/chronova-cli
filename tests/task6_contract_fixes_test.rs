@@ -31,7 +31,10 @@ fn log_file_flag_writes_to_the_given_path_not_the_default() {
 }
 
 #[test]
-fn disable_offline_drops_the_heartbeat_after_a_failed_send() {
+fn disable_offline_drops_the_heartbeat_and_exits_nonzero_after_a_failed_send() {
+    // A caller must be able to tell "sent" from "silently discarded" (review
+    // ruling): a failed send under --disable-offline now fails the process,
+    // not just Ok(()) with a log line nobody's watching.
     let home = tempfile::tempdir().unwrap();
     let entity = home.path().join("main.rs");
     std::fs::write(&entity, "// test\n").unwrap();
@@ -44,7 +47,7 @@ fn disable_offline_drops_the_heartbeat_after_a_failed_send() {
         .arg("--api-url")
         .arg(UNROUTABLE_API_URL)
         .assert()
-        .success();
+        .failure();
 
     let queue = Queue::with_path(home.path().join(".chronova").join("queue.db"))
         .expect("failed to open the queue db the run created");
@@ -78,6 +81,110 @@ fn without_disable_offline_a_failed_send_stays_queued() {
     assert_eq!(
         stats.total, 1,
         "without --disable-offline the heartbeat should remain queued after a failed send"
+    );
+}
+
+/// A single valid `Heartbeat` JSON array element for feeding `--extra-heartbeats` on stdin.
+const EXTRA_HEARTBEAT_JSON: &str = r#"[
+    {
+        "id": "test-id-123",
+        "entity": "/path/to/file.rs",
+        "type": "file",
+        "time": 1764432679.433,
+        "project": "test-project",
+        "branch": "main",
+        "language": "Rust",
+        "is_write": false,
+        "lines": 100,
+        "lineno": 10,
+        "cursorpos": 5,
+        "user_agent": "vscode/1.106.3 vscode-wakatime/25.5.0",
+        "category": "coding",
+        "machine": "test-machine",
+        "dependencies": [],
+        "editor": null,
+        "operating_system": null
+    }
+]"#;
+
+#[test]
+fn extra_heartbeats_with_disable_offline_drops_and_fails_on_a_failed_send() {
+    // Review ruling: --disable-offline only honoured the single-heartbeat
+    // path; --extra-heartbeats queued unconditionally and never read it.
+    let home = tempfile::tempdir().unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--extra-heartbeats")
+        .arg("--disable-offline")
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .write_stdin(EXTRA_HEARTBEAT_JSON)
+        .assert()
+        .failure();
+
+    let queue = Queue::with_path(home.path().join(".chronova").join("queue.db"))
+        .expect("failed to open the queue db the run created");
+    let stats = queue.get_sync_stats().expect("failed to read queue stats");
+    assert_eq!(
+        stats.total, 0,
+        "--extra-heartbeats --disable-offline must drop the heartbeat instead of queueing it"
+    );
+}
+
+#[test]
+fn extra_heartbeats_without_disable_offline_still_queues_on_a_failed_send() {
+    // Contrast case for the test above, same reason as the single-heartbeat
+    // pair: proves the assertion has teeth.
+    let home = tempfile::tempdir().unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--extra-heartbeats")
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .write_stdin(EXTRA_HEARTBEAT_JSON)
+        .assert()
+        .success();
+
+    let queue = Queue::with_path(home.path().join(".chronova").join("queue.db"))
+        .expect("failed to open the queue db the run created");
+    let stats = queue.get_sync_stats().expect("failed to read queue stats");
+    assert_eq!(
+        stats.total, 1,
+        "without --disable-offline, --extra-heartbeats should still queue on a failed send"
+    );
+}
+
+#[test]
+fn disable_offline_from_config_file_alone_drops_the_heartbeat() {
+    // Review ruling: config.disable_offline (the `offline` key, inverted —
+    // see config.rs) was parsed but never read anywhere. No --disable-offline
+    // CLI flag here at all; only the config file should be driving this.
+    let home = tempfile::tempdir().unwrap();
+    let entity = home.path().join("main.rs");
+    std::fs::write(&entity, "// test\n").unwrap();
+    let config_path = home.path().join("chronova.cfg");
+    std::fs::write(&config_path, "[settings]\noffline = false\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--entity")
+        .arg(&entity)
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .assert()
+        .failure();
+
+    let queue = Queue::with_path(home.path().join(".chronova").join("queue.db"))
+        .expect("failed to open the queue db the run created");
+    let stats = queue.get_sync_stats().expect("failed to read queue stats");
+    assert_eq!(
+        stats.total, 0,
+        "a config file's `offline = false` (disable_offline = true) must drop the heartbeat \
+         exactly like the CLI flag, with no --disable-offline passed"
     );
 }
 
@@ -213,7 +320,7 @@ fn log_to_stdout_stays_silent_on_the_json_forced_heartbeat_path() {
 }
 
 #[test]
-fn help_marks_exactly_the_thirteen_unimplemented_flags() {
+fn help_marks_exactly_the_fourteen_unimplemented_flags() {
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
     let assert = cmd.arg("--help").assert().success();
     let output = assert.get_output();
@@ -258,6 +365,7 @@ fn help_marks_exactly_the_thirteen_unimplemented_flags() {
         "--send-diagnostics-on-errors",
         "--guess-language",
         "--file-experts",
+        "--log-to-stdout",
     ];
     expected.sort_unstable();
     let mut marked_sorted = marked.clone();
@@ -265,7 +373,9 @@ fn help_marks_exactly_the_thirteen_unimplemented_flags() {
 
     assert_eq!(
         marked_sorted, expected,
-        "the set of flags marked [not yet implemented] must be exactly the brief's thirteen"
+        "the set of flags marked [not yet implemented] must be exactly the frozen fourteen \
+         (the brief's original thirteen plus --log-to-stdout, added under review — see the \
+         fix report)"
     );
 
     // Flags owned by sibling tasks (4 and 5) must not be marked here.

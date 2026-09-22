@@ -123,18 +123,18 @@ payload while costing each literal a single line.
 Two behaviours that are easy to trip over and hard to notice:
 
 - **`HeartbeatManager::new()` empties the queue.** It calls
-  `queue.cleanup_old_entries(0)` (`heartbeat.rs:123`), and `max_age_days == 0`
+  `queue.cleanup_old_entries(0)` (`heartbeat.rs:133`), and `max_age_days == 0`
   is the special case that runs `DELETE FROM heartbeats` (`queue.rs:314-317`).
   So constructing a manager discards every pending heartbeat. Use
-  `HeartbeatManager::new_with_queue` (`heartbeat.rs:136`) when the queue must
+  `HeartbeatManager::new_with_queue` (`heartbeat.rs:146`) when the queue must
   survive, and do not treat the queue as durable storage across invocations.
 
 - **`tracing` at INFO goes to stdout, not just the log file.** `setup_logging`
-  adds a stdout layer in normal mode (`logger.rs:63-65`) and the default level
-  is INFO (`logger.rs:36`). For any flag whose caller parses or error-checks
-  output, use `setup_logging_with_output_format(verbose, true)`, which keeps
-  file logging and drops the stdout layer. `--sync-ai-activity` does this
-  because the invoking plugin logs any output as an error.
+  adds a stdout layer in normal mode (`logger.rs:81-85`) and the default level
+  is INFO (`logger.rs:63`). For any flag whose caller parses or error-checks
+  output, use `setup_logging_with_options(verbose, true, cli.log_file.as_deref(),
+  false)`, which keeps file logging and drops the stdout layer. `--sync-ai-activity`
+  does this because the invoking plugin logs any output as an error.
 
 ## Code Style
 
@@ -287,9 +287,10 @@ your own sessions, including this one. Consequences worth knowing:
   `hb_<ts>_<rand>`), but the route de-duplicates on `(userId, time, entity)`.
   `ai_sync.rs:836` derives `time` from the transcript's own timestamp, which
   is stable across re-parses, so re-parsing an already-reported window is
-  idempotent, not double-counted. The short lookback on an unset cutoff isn't
-  a de-duplication workaround — it exists to bound how much history a first
-  run has to walk; the server-side de-dup now makes it belt-and-braces.
+  idempotent, not double-counted. The short lookback was added as a
+  double-count guard (`ai_sync.rs:41-45`); with server-side de-dup it is now
+  belt-and-braces, and its remaining value is bounding how much history a
+  first run walks.
 
 Upstream reference when changing the parser: `wakatime-cli`'s
 `pkg/ai/claude.go` and `pkg/ai/ai.go`. Fetch them rather than inferring the

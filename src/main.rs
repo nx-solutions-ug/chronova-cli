@@ -249,6 +249,12 @@ async fn main() -> Result<()> {
         if cli.hide_repository_url {
             config.hide_repository_url = true;
         }
+        // add_heartbeat_to_queue has no Cli parameter, only self.config, so
+        // the flag must reach it this way (CLI > config file > default,
+        // matching the git privacy flags above).
+        if cli.disable_offline {
+            config.disable_offline = true;
+        }
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Read extra heartbeats from STDIN as JSON array
@@ -444,6 +450,9 @@ async fn main() -> Result<()> {
     }
     if cli.hide_repository_url {
         config.hide_repository_url = true;
+    }
+    if cli.disable_offline {
+        config.disable_offline = true;
     }
     let heartbeat_manager = HeartbeatManager::new(config);
 
@@ -705,10 +714,17 @@ async fn process_extra_heartbeats(
     );
 
     for heartbeat in &heartbeats {
-        heartbeat_manager.add_heartbeat_to_queue(heartbeat.clone())?;
+        heartbeat_manager
+            .add_heartbeat_to_queue(heartbeat.clone())
+            .await?;
     }
 
-    tracing::info!("Successfully queued {} extra heartbeats", heartbeats.len());
+    // Neutral wording: with --disable-offline these were sent directly rather
+    // than queued, and add_heartbeat_to_queue doesn't expose which happened.
+    tracing::info!(
+        "Successfully processed {} extra heartbeats",
+        heartbeats.len()
+    );
 
     Ok(())
 }
