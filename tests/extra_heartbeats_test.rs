@@ -3,6 +3,12 @@ use assert_cmd::Command;
 use chronova_cli::queue::{Queue, QueueOps};
 use tempfile::{NamedTempFile, TempDir};
 
+// Unix only: `dirs::home_dir()` ignores `$HOME` on Windows and resolves the
+// real user profile instead, so this helper's isolation silently breaks
+// there (Queue::with_path fails because the tempdir's .chronova\ is never
+// created, and the binary would otherwise read/write the CI account's real
+// home). Do not ungate without giving Windows its own isolation strategy.
+#[cfg(unix)]
 /// Run `chronova-cli` with the given args and stdin under an isolated `$HOME`,
 /// then return every pending heartbeat left in that home's queue.db.
 fn run_and_read_queue(args: &[&str], stdin: &str) -> Vec<chronova_cli::heartbeat::Heartbeat> {
@@ -153,6 +159,8 @@ api_key = test-key-123
         .failure();
 }
 
+// See the #[cfg(unix)] note on run_and_read_queue above.
+#[cfg(unix)]
 #[test]
 fn test_extra_heartbeats_keeps_primary_entity() {
     let stdin_batch = r#"[
@@ -169,6 +177,7 @@ fn test_extra_heartbeats_keeps_primary_entity() {
     assert!(entities.contains(&"extra-two.rs"));
 }
 
+#[cfg(unix)]
 #[test]
 fn test_extra_heartbeats_without_entity_is_unchanged() {
     let stdin_batch = r#"[
@@ -184,6 +193,7 @@ fn test_extra_heartbeats_without_entity_is_unchanged() {
     assert!(entities.contains(&"extra-two.rs"));
 }
 
+#[cfg(unix)]
 #[test]
 fn test_extra_heartbeats_empty_json_array_keeps_primary() {
     let heartbeats = run_and_read_queue(&["--entity", "foo.rs", "--extra-heartbeats"], "[]");
@@ -192,6 +202,7 @@ fn test_extra_heartbeats_empty_json_array_keeps_primary() {
     assert_eq!(heartbeats[0].entity, "foo.rs");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_extra_heartbeats_empty_stdin_keeps_primary() {
     let heartbeats = run_and_read_queue(&["--entity", "foo.rs", "--extra-heartbeats"], "");
@@ -200,6 +211,7 @@ fn test_extra_heartbeats_empty_stdin_keeps_primary() {
     assert_eq!(heartbeats[0].entity, "foo.rs");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_extra_heartbeats_relaxed_parsing_without_id_or_type() {
     let stdin_batch = r#"[{"entity": "relaxed.rs", "time": 1700000002.0}]"#;
