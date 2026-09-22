@@ -178,7 +178,15 @@ impl HeartbeatManager {
         Ok(())
     }
 
-    async fn create_heartbeat(&self, cli: Cli, entity: String) -> Result<Heartbeat, anyhow::Error> {
+    /// Builds a `Heartbeat` for `entity` from `cli`, collecting project,
+    /// git and language metadata for it. Public so callers outside this
+    /// module (the `--extra-heartbeats` path in `main.rs`) can reuse the
+    /// same construction the normal `process` flow uses.
+    pub async fn create_heartbeat(
+        &self,
+        cli: Cli,
+        entity: String,
+    ) -> Result<Heartbeat, anyhow::Error> {
         let time = cli
             .time
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
