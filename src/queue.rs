@@ -506,6 +506,18 @@ impl Queue {
         Ok(Self { conn })
     }
 
+    /// Test-only: back-date a queued heartbeat's `created_at` so retention
+    /// cleanup tests (here and in other modules) can exercise entries that
+    /// are actually old, without reaching into the private `conn` field.
+    #[cfg(test)]
+    pub(crate) fn backdate_for_test(&self, id: &str, days: i64) -> Result<(), QueueError> {
+        self.conn.execute(
+            "UPDATE heartbeats SET created_at = datetime('now', ?1) WHERE id = ?2",
+            params![format!("-{} days", days), id],
+        )?;
+        Ok(())
+    }
+
     /// Initialize database schema and indexes
     fn init_database(conn: &Connection) -> Result<(), QueueError> {
         // Enable WAL mode for better write concurrency and reduced fsync overhead.

@@ -122,12 +122,19 @@ payload while costing each literal a single line.
 
 Two behaviours that are easy to trip over and hard to notice:
 
-- **`HeartbeatManager::new()` empties the queue.** It calls
-  `queue.cleanup_old_entries(0)` (`heartbeat.rs:123`), and `max_age_days == 0`
-  is the special case that runs `DELETE FROM heartbeats` (`queue.rs:314-317`).
-  So constructing a manager discards every pending heartbeat. Use
-  `HeartbeatManager::new_with_queue` (`heartbeat.rs:136`) when the queue must
-  survive, and do not treat the queue as durable storage across invocations.
+- **The queue survives construction, but not forever.** `HeartbeatManager::new`
+  (`heartbeat.rs:119`) delegates to `new_with_queue` (`heartbeat.rs:131`),
+  the single construction path, and neither touches the queue's contents — a
+  heartbeat queued by a previous invocation is still there when the next
+  invocation constructs its own manager. Age-based pruning instead happens on
+  the sync/flush path: `process_queue` calls `enforce_retention`
+  (`heartbeat.rs:152`) on every run, which runs
+  `queue.cleanup_old_entries(sync_retention_days)` (`config.rs:275`, default
+  7). `max_age_days == 0` is still the special case that runs
+  `DELETE FROM heartbeats` (`queue.rs:314-317`), so never call
+  `cleanup_old_entries(0)` from construction or the sync/flush path — that is
+  the bug this landmine used to describe. An explicit "clear the queue"
+  caller, and the test suite, may still call it with `0` deliberately.
 
 - **`tracing` at INFO goes to stdout, not just the log file.** `setup_logging`
   adds a stdout layer in normal mode (`logger.rs:63-65`) and the default level
