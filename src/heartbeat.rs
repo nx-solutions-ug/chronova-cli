@@ -306,7 +306,14 @@ impl HeartbeatManager {
 
     async fn process_queue(&self) -> Result<(usize, usize), anyhow::Error> {
         // Age-based retention runs once per flush, ahead of processing.
-        self.enforce_retention();
+        // `block_in_place` (not `spawn_blocking`, unlike the rest of this
+        // function) because `enforce_retention` needs `self.queue` directly
+        // — `spawn_blocking` requires a `'static` closure, which a borrowed
+        // `&self` can't satisfy. `process_queue` only ever runs on the
+        // multi-threaded runtime `#[tokio::main]` uses in production; the
+        // two `#[tokio::test]` callers that could hit a current-thread
+        // runtime are both already `#[ignore]`d for an unrelated reason.
+        tokio::task::block_in_place(|| self.enforce_retention());
 
         // Process the queue in batches to avoid loading everything into memory at once.
         // Combine the "prepare retry-eligible failures" pass and the "fetch pending" call
@@ -747,10 +754,13 @@ mod tests {
 
     /// Regression test for the finding: constructing a `HeartbeatManager`
     /// must never discard heartbeats a previous invocation left queued.
-    /// `new_with_queue` is the single construction path `new` delegates to,
-    /// so exercising it against a queue re-opened from disk (exactly what a
-    /// fresh invocation does against `~/.chronova/queue.db`) covers `new`
-    /// too.
+    /// This exercises `new_with_queue`, the shared construction logic `new`
+    /// delegates to — it does not exercise `new` itself, so it would stay
+    /// green even if a `cleanup_old_entries(0)` call were reintroduced
+    /// directly inside `new`'s own body. It's
+    /// `test_offline_count_reports_queued_heartbeats`
+    /// (`tests/cli_offline_commands.rs`), which calls `HeartbeatManager::new`
+    /// through the real binary, that would actually catch that.
     #[test]
     fn test_construction_does_not_wipe_pending_heartbeats() {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
