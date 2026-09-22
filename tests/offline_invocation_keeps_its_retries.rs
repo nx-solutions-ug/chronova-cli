@@ -10,6 +10,16 @@
 //! `dirs::home_dir()` — queue, config, log — lands in a temp directory instead of
 //! the developer's real state. `$HOME` is process-global, so this is deliberately
 //! the only test in this binary.
+//!
+//! Unix only, and deliberately so: `$HOME` isolates this run on unix, where
+//! `dirs::home_dir()` reads `env::var_os("HOME")` first, but **not on Windows**,
+//! where `dirs-7.0.0/src/win.rs:5` resolves `known_folder_profile()` and ignores
+//! the variable entirely. On Windows the binary under test would read and write
+//! the real `%USERPROFILE%\.chronova\queue.db`, shared with every other test in
+//! the job, and assertions about queue contents would answer for whatever else
+//! had run first. Do not ungate this without first giving the queue path an
+//! override that does not go through `dirs`.
+#![cfg(unix)]
 
 use chronova_cli::config::Config;
 use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
