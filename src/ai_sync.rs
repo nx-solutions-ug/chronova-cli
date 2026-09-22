@@ -1343,6 +1343,7 @@ impl<'a> BuildContext<'a> {
                 .project_dir
                 .clone()
                 .or_else(|| self.project_folder.map(|folder| folder.to_string()))
+                .map(|dir| as_directory_path(&dir))
         };
 
         // Filter before anything else is looked up: a heartbeat that must not
@@ -1512,6 +1513,20 @@ impl<'a> BuildContext<'a> {
     }
 }
 
+/// A directory path ending in the platform separator.
+///
+/// A transcript's `cwd` is stored exactly as it was written, and a real one
+/// carries no trailing separator (`/home/dev/private-repo`). Filter patterns
+/// are unanchored regexes, so without this a pattern naming the repository
+/// itself — `/private-repo/`, the natural way to write it — would miss the
+/// directory it names and let that repository's `app` telemetry out.
+fn as_directory_path(dir: &str) -> String {
+    if dir.ends_with(std::path::MAIN_SEPARATOR) {
+        return dir.to_string();
+    }
+    format!("{}{}", dir, std::path::MAIN_SEPARATOR)
+}
+
 fn truncate(value: &str, max: usize) -> String {
     if value.chars().count() <= max {
         return value.to_string();
@@ -1610,31 +1625,38 @@ mod tests {
     fn an_app_heartbeat_is_excluded_by_its_repository_not_its_session_id() {
         // The session id matches no path pattern, so filtering it directly
         // would let an excluded repository's prompt and token telemetry out.
+        // The cwd is stored exactly as the transcript wrote it, and a real one
+        // carries no trailing separator, so the fixture must not add one.
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("private-repo");
+        fs::create_dir(&repo).unwrap();
+        let cwd = repo.to_str().unwrap();
+        assert!(!cwd.ends_with(std::path::MAIN_SEPARATOR), "slashless cwd");
+
         let config = Config {
             ignore_patterns: vec!["/private-repo/".to_string()],
             ..Config::default()
         };
 
         assert!(
-            build_all(
-                config,
-                record_at("Claude sess-1", "app", Some("/home/dev/private-repo/"))
-            )
-            .is_empty(),
+            build_all(config, record_at("Claude sess-1", "app", Some(cwd))).is_empty(),
             "an app heartbeat from an excluded repository must be dropped"
         );
     }
 
     #[test]
     fn an_app_heartbeat_survives_a_repository_level_include() {
+        let dir = TempDir::new().unwrap();
+        let repo = dir.path().join("work-repo");
+        fs::create_dir(&repo).unwrap();
+        let cwd = repo.to_str().unwrap();
+        assert!(!cwd.ends_with(std::path::MAIN_SEPARATOR), "slashless cwd");
+
         let config = Config {
             include_patterns: vec!["/work-repo/".to_string()],
             ..Config::default()
         };
-        let built = build_all(
-            config,
-            record_at("Claude sess-1", "app", Some("/home/dev/work-repo/")),
-        );
+        let built = build_all(config, record_at("Claude sess-1", "app", Some(cwd)));
 
         assert_eq!(
             built.len(),
@@ -1642,6 +1664,20 @@ mod tests {
             "an include list of path patterns must not drop app telemetry"
         );
         assert_eq!(built[0].entity, "Claude sess-1");
+    }
+
+    #[test]
+    fn a_directory_path_is_normalised_to_end_in_a_separator() {
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            as_directory_path("/home/dev/private-repo"),
+            format!("/home/dev/private-repo{}", sep)
+        );
+        assert_eq!(
+            as_directory_path(&format!("/home/dev/private-repo{}", sep)),
+            format!("/home/dev/private-repo{}", sep),
+            "an already-terminated path is left alone"
+        );
     }
 
     #[test]
