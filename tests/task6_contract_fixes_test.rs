@@ -1,12 +1,20 @@
 // Integration tests for Task 6 (contract-gap-fixes): --log-file, --log-to-stdout,
 // --disable-offline (6a/6b) and the [not yet implemented] --help markers (6d).
 use assert_cmd::Command;
+// Only used by the #[cfg(unix)] tests below, which read the queue db back
+// from a path under an isolated $HOME.
+#[cfg(unix)]
 use chronova_cli::queue::{Queue, QueueOps};
 
 // An address that refuses connections immediately, matching the convention
 // already used in src/api.rs's own unit tests for forcing a network error.
 const UNROUTABLE_API_URL: &str = "http://127.0.0.1:9";
 
+// dirs::home_dir() ignores $HOME on Windows (it resolves the real user
+// profile instead), so setting $HOME to a TempDir does not isolate this
+// binary's on-disk state there on that platform. Gated to unix rather than
+// "fixed" — do not ungate without a Windows-compatible isolation mechanism.
+#[cfg(unix)]
 #[test]
 fn log_file_flag_writes_to_the_given_path_not_the_default() {
     let home = tempfile::tempdir().unwrap();
@@ -30,6 +38,8 @@ fn log_file_flag_writes_to_the_given_path_not_the_default() {
     );
 }
 
+// dirs::home_dir() ignores $HOME on Windows; see the gate above.
+#[cfg(unix)]
 #[test]
 fn disable_offline_drops_the_heartbeat_and_exits_nonzero_after_a_failed_send() {
     // A caller must be able to tell "sent" from "silently discarded" (review
@@ -58,6 +68,8 @@ fn disable_offline_drops_the_heartbeat_and_exits_nonzero_after_a_failed_send() {
     );
 }
 
+// dirs::home_dir() ignores $HOME on Windows; see the gate above.
+#[cfg(unix)]
 #[test]
 fn without_disable_offline_a_failed_send_stays_queued() {
     // Contrast case for the test above: proves the assertion has teeth by
@@ -85,6 +97,8 @@ fn without_disable_offline_a_failed_send_stays_queued() {
 }
 
 /// A single valid `Heartbeat` JSON array element for feeding `--extra-heartbeats` on stdin.
+// Only used by the #[cfg(unix)] tests below — see the gate comments.
+#[cfg(unix)]
 const EXTRA_HEARTBEAT_JSON: &str = r#"[
     {
         "id": "test-id-123",
@@ -107,6 +121,8 @@ const EXTRA_HEARTBEAT_JSON: &str = r#"[
     }
 ]"#;
 
+// dirs::home_dir() ignores $HOME on Windows; see the gate above.
+#[cfg(unix)]
 #[test]
 fn extra_heartbeats_with_disable_offline_drops_and_fails_on_a_failed_send() {
     // Review ruling: --disable-offline only honoured the single-heartbeat
@@ -132,6 +148,8 @@ fn extra_heartbeats_with_disable_offline_drops_and_fails_on_a_failed_send() {
     );
 }
 
+// dirs::home_dir() ignores $HOME on Windows; see the gate above.
+#[cfg(unix)]
 #[test]
 fn extra_heartbeats_without_disable_offline_still_queues_on_a_failed_send() {
     // Contrast case for the test above, same reason as the single-heartbeat
@@ -156,6 +174,8 @@ fn extra_heartbeats_without_disable_offline_still_queues_on_a_failed_send() {
     );
 }
 
+// dirs::home_dir() ignores $HOME on Windows; see the gate above.
+#[cfg(unix)]
 #[test]
 fn disable_offline_from_config_file_alone_drops_the_heartbeat() {
     // Review ruling: config.disable_offline (the `offline` key, inverted —
@@ -188,6 +208,10 @@ fn disable_offline_from_config_file_alone_drops_the_heartbeat() {
     );
 }
 
+// Byte-silence is a stdout/stderr property of the process, not a $HOME
+// property — dirs::home_dir() ignoring $HOME on Windows doesn't affect what
+// this assertion checks, so this stays cross-platform (unlike its sibling
+// below, which reads the log file back from under the tempdir).
 #[test]
 fn sync_ai_activity_stays_byte_silent_on_success_even_with_log_to_stdout() {
     // The invoking plugin logs any stdout/stderr this process produces as an
@@ -218,9 +242,30 @@ fn sync_ai_activity_stays_byte_silent_on_success_even_with_log_to_stdout() {
         "stderr must stay empty, got: {:?}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
 
+// dirs::home_dir() ignores $HOME on Windows; see the gate above. Split out
+// of the byte-silence test above (which stays cross-platform) because this
+// half is the one that depends on $HOME isolation: it reads the log file
+// back from a path under the tempdir.
+#[cfg(unix)]
+#[test]
+fn sync_ai_activity_logs_to_file_even_with_log_to_stdout() {
     // Prove logging still happened (to the file), rather than having been
     // silently disabled altogether.
+    let home = tempfile::tempdir().unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--sync-ai-activity")
+        .arg("--plugin")
+        .arg("claude-code/1.0.0 claude-code-wakatime/4.1.0")
+        .arg("--project-folder")
+        .arg(home.path())
+        .arg("--log-to-stdout")
+        .assert()
+        .success();
+
     let log_contents =
         std::fs::read_to_string(home.path().join(".chronova.log")).expect("log file must exist");
     assert!(
