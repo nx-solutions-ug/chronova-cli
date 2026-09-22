@@ -254,8 +254,10 @@ async fn main() -> Result<()> {
         }
         let heartbeat_manager = HeartbeatManager::new(config);
 
-        // Read extra heartbeats from STDIN as JSON array
-        if let Err(e) = process_extra_heartbeats(heartbeat_manager).await {
+        // Read extra heartbeats from STDIN as JSON array. `cli` is passed
+        // through so the primary --entity heartbeat (if any) can be built
+        // and enqueued alongside the stdin batch, rather than dropped.
+        if let Err(e) = process_extra_heartbeats(heartbeat_manager, cli).await {
             eprintln!("Error processing extra heartbeats: {}", e);
             process::exit(1);
         }
@@ -570,128 +572,142 @@ async fn handle_config_operations(cli: &Cli) -> Result<(), anyhow::Error> {
 /// Process extra heartbeats from STDIN as a JSON array
 async fn process_extra_heartbeats(
     heartbeat_manager: HeartbeatManager,
+    cli: Cli,
 ) -> Result<(), anyhow::Error> {
     use std::io::{self, Read};
     use uuid::Uuid;
+
+    let primary_heartbeat = match cli.entity.clone() {
+        Some(entity) => Some(heartbeat_manager.create_heartbeat(cli, entity).await?),
+        None => None,
+    };
 
     // Read all input from STDIN
     let mut input = String::new();
     io::stdin().read_to_string(&mut input)?;
 
-    // Debug: Log the raw input to understand the JSON format
-    tracing::debug!(
-        "Raw extra heartbeats input (first 500 chars): {}",
-        if input.len() > 500 {
-            &input[..500]
-        } else {
-            &input
-        }
-    );
+    // Empty stdin means "no extra heartbeats", not malformed JSON; parsing
+    // it would fail and, with --entity set, drop the primary heartbeat too.
+    let mut heartbeats: Vec<chronova_cli::heartbeat::Heartbeat> = if input.trim().is_empty() {
+        Vec::new()
+    } else {
+        // Debug: Log the raw input to understand the JSON format
+        tracing::debug!(
+            "Raw extra heartbeats input (first 500 chars): {}",
+            if input.len() > 500 {
+                &input[..500]
+            } else {
+                &input
+            }
+        );
 
-    // Try to parse as JSON value first to inspect structure
-    match serde_json::from_str::<serde_json::Value>(&input) {
-        Ok(value) => {
-            tracing::debug!("Parsed JSON value: {}", value);
+        // Try to parse as JSON value first to inspect structure
+        match serde_json::from_str::<serde_json::Value>(&input) {
+            Ok(value) => {
+                tracing::debug!("Parsed JSON value: {}", value);
 
-            // Check if it's an array
-            if let serde_json::Value::Array(arr) = &value {
-                tracing::debug!("JSON is an array with {} elements", arr.len());
+                // Check if it's an array
+                if let serde_json::Value::Array(arr) = &value {
+                    tracing::debug!("JSON is an array with {} elements", arr.len());
 
-                // Log first element structure for debugging
-                if let Some(first) = arr.first() {
-                    tracing::debug!("First element structure: {}", first);
+                    // Log first element structure for debugging
+                    if let Some(first) = arr.first() {
+                        tracing::debug!("First element structure: {}", first);
+                    }
                 }
             }
+            Err(e) => {
+                tracing::error!("Failed to parse as JSON value: {}", e);
+            }
         }
-        Err(e) => {
-            tracing::error!("Failed to parse as JSON value: {}", e);
-        }
-    }
 
-    // Parse the JSON array of heartbeats, but handle missing id field
-    // External heartbeats (from WakaTime extension) may not include an id field
-    let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> =
-        serde_json::from_str(&input);
+        // Parse the JSON array of heartbeats, but handle missing id field
+        // External heartbeats (from WakaTime extension) may not include an id field
+        let heartbeats_result: Result<Vec<chronova_cli::heartbeat::Heartbeat>, _> =
+            serde_json::from_str(&input);
 
-    let heartbeats = match heartbeats_result {
-        Ok(heartbeats) => heartbeats,
-        Err(e) => {
-            // If parsing fails due to missing id field, try parsing as a different structure
-            // that doesn't require id, then add the id field manually
-            tracing::warn!("Failed to parse heartbeats with strict validation: {}", e);
-            tracing::info!("Attempting to parse with relaxed validation for external heartbeats");
+        match heartbeats_result {
+            Ok(heartbeats) => heartbeats,
+            Err(e) => {
+                // If parsing fails due to missing id field, try parsing as a different structure
+                // that doesn't require id, then add the id field manually
+                tracing::warn!("Failed to parse heartbeats with strict validation: {}", e);
+                tracing::info!(
+                    "Attempting to parse with relaxed validation for external heartbeats"
+                );
 
-            // Define a relaxed heartbeat structure that doesn't require id or type
-            // This matches the WakaTime ExtraHeartbeat format where most fields are optional
-            #[derive(Debug, serde::Deserialize)]
-            struct RelaxedHeartbeat {
-                pub entity: String,
-                #[serde(rename = "type", default = "default_entity_type")]
-                pub entity_type: String,
-                pub time: f64,
-                pub project: Option<String>,
-                pub branch: Option<String>,
-                pub language: Option<String>,
-                #[serde(default)]
-                pub is_write: bool,
-                pub lines: Option<i32>,
-                pub lineno: Option<i32>,
-                pub cursorpos: Option<i32>,
-                pub user_agent: Option<String>,
-                pub category: Option<String>,
-                pub machine: Option<String>,
-                #[serde(default)]
-                pub dependencies: Vec<String>,
+                // Define a relaxed heartbeat structure that doesn't require id or type
+                // This matches the WakaTime ExtraHeartbeat format where most fields are optional
+                #[derive(Debug, serde::Deserialize)]
+                struct RelaxedHeartbeat {
+                    pub entity: String,
+                    #[serde(rename = "type", default = "default_entity_type")]
+                    pub entity_type: String,
+                    pub time: f64,
+                    pub project: Option<String>,
+                    pub branch: Option<String>,
+                    pub language: Option<String>,
+                    #[serde(default)]
+                    pub is_write: bool,
+                    pub lines: Option<i32>,
+                    pub lineno: Option<i32>,
+                    pub cursorpos: Option<i32>,
+                    pub user_agent: Option<String>,
+                    pub category: Option<String>,
+                    pub machine: Option<String>,
+                    #[serde(default)]
+                    pub dependencies: Vec<String>,
+                }
+
+                fn default_entity_type() -> String {
+                    "file".to_string()
+                }
+
+                // Parse as relaxed heartbeats
+                let relaxed_heartbeats: Vec<RelaxedHeartbeat> = serde_json::from_str(&input)
+                    .map_err(|e| {
+                        tracing::error!("Failed to parse even with relaxed validation: {}", e);
+                        anyhow::anyhow!("Failed to parse extra heartbeats: {}", e)
+                    })?;
+
+                // Convert to proper heartbeats by adding id field
+                let mut heartbeats = Vec::new();
+                for relaxed in relaxed_heartbeats {
+                    let heartbeat = chronova_cli::heartbeat::Heartbeat {
+                        id: Uuid::new_v4().to_string(), // Generate UUID for missing id
+                        entity: relaxed.entity,
+                        entity_type: relaxed.entity_type,
+                        time: relaxed.time,
+                        project: relaxed.project,
+                        branch: relaxed.branch,
+                        language: relaxed.language,
+                        is_write: relaxed.is_write,
+                        lines: relaxed.lines,
+                        lineno: relaxed.lineno,
+                        cursorpos: relaxed.cursorpos,
+                        user_agent: Some(chronova_cli::user_agent::generate_user_agent(
+                            relaxed.user_agent.as_deref(),
+                        )),
+                        category: relaxed.category,
+                        machine: relaxed.machine,
+                        editor: None,
+                        operating_system: None,
+                        commit_hash: None,
+                        commit_author: None,
+                        commit_message: None,
+                        repository_url: None,
+                        dependencies: relaxed.dependencies,
+                        ai: Default::default(),
+                    };
+                    heartbeats.push(heartbeat);
+                }
+
+                tracing::info!(
+                    "Successfully parsed {} external heartbeats with generated IDs",
+                    heartbeats.len()
+                );
+                heartbeats
             }
-
-            fn default_entity_type() -> String {
-                "file".to_string()
-            }
-
-            // Parse as relaxed heartbeats
-            let relaxed_heartbeats: Vec<RelaxedHeartbeat> =
-                serde_json::from_str(&input).map_err(|e| {
-                    tracing::error!("Failed to parse even with relaxed validation: {}", e);
-                    anyhow::anyhow!("Failed to parse extra heartbeats: {}", e)
-                })?;
-
-            // Convert to proper heartbeats by adding id field
-            let mut heartbeats = Vec::new();
-            for relaxed in relaxed_heartbeats {
-                let heartbeat = chronova_cli::heartbeat::Heartbeat {
-                    id: Uuid::new_v4().to_string(), // Generate UUID for missing id
-                    entity: relaxed.entity,
-                    entity_type: relaxed.entity_type,
-                    time: relaxed.time,
-                    project: relaxed.project,
-                    branch: relaxed.branch,
-                    language: relaxed.language,
-                    is_write: relaxed.is_write,
-                    lines: relaxed.lines,
-                    lineno: relaxed.lineno,
-                    cursorpos: relaxed.cursorpos,
-                    user_agent: Some(chronova_cli::user_agent::generate_user_agent(
-                        relaxed.user_agent.as_deref(),
-                    )),
-                    category: relaxed.category,
-                    machine: relaxed.machine,
-                    editor: None,
-                    operating_system: None,
-                    commit_hash: None,
-                    commit_author: None,
-                    commit_message: None,
-                    repository_url: None,
-                    dependencies: relaxed.dependencies,
-                    ai: Default::default(),
-                };
-                heartbeats.push(heartbeat);
-            }
-
-            tracing::info!(
-                "Successfully parsed {} external heartbeats with generated IDs",
-                heartbeats.len()
-            );
-            heartbeats
         }
     };
 
@@ -700,11 +716,13 @@ async fn process_extra_heartbeats(
         heartbeats.len()
     );
 
+    heartbeats.extend(primary_heartbeat);
+
     for heartbeat in &heartbeats {
         heartbeat_manager.add_heartbeat_to_queue(heartbeat.clone())?;
     }
 
-    tracing::info!("Successfully queued {} extra heartbeats", heartbeats.len());
+    tracing::info!("Successfully queued {} heartbeat(s)", heartbeats.len());
 
     Ok(())
 }
