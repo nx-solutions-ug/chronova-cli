@@ -4,11 +4,19 @@ use chronova_cli::queue::{Queue, QueueOps};
 use predicates::prelude::*;
 use std::fs;
 
+/// Isolated under a throwaway `$HOME` (see AGENTS.md's "State on Disk" /
+/// "Testing" sections) so this never opens the developer's real
+/// `~/.chronova/queue.db`, and pointed at an unroutable `--api-url` so
+/// nothing this test triggers can leave the machine.
 #[test]
 fn test_offline_count_command() {
+    let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
 
-    cmd.arg("--offline-count")
+    cmd.env("HOME", home.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
+        .arg("--offline-count")
         .assert()
         .success()
         .stdout(predicate::str::contains("Offline heartbeats queue status:"))
@@ -66,17 +74,28 @@ fn test_offline_count_reports_queued_heartbeats() {
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
 
     cmd.env("HOME", home.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
         .arg("--offline-count")
         .assert()
         .success()
         .stdout(predicate::str::contains("Total: 1\n"));
 }
 
+/// Isolated under a throwaway `$HOME` and an unroutable `--api-url`: unlike
+/// `--offline-count`, `--sync-offline-activity` actually attempts to send
+/// whatever is queued, so without isolation this would fire real requests
+/// (using the developer's real `~/.chronova.cfg` API key, against the real
+/// `~/.chronova/queue.db`) every time `cargo test` runs.
 #[test]
 fn test_sync_offline_activity_command() {
+    let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
 
-    cmd.arg("--sync-offline-activity")
+    cmd.env("HOME", home.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
+        .arg("--sync-offline-activity")
         .arg("10")
         .assert()
         .success()
@@ -86,11 +105,18 @@ fn test_sync_offline_activity_command() {
         .stdout(predicate::str::contains("Heartbeats failed:"));
 }
 
+/// Same isolation as `test_sync_offline_activity_command`, and for the same
+/// reason: `--force-sync` still goes through `--sync-offline-activity`'s
+/// send path.
 #[test]
 fn test_force_sync_option() {
+    let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
 
-    cmd.arg("--sync-offline-activity")
+    cmd.env("HOME", home.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
+        .arg("--sync-offline-activity")
         .arg("10")
         .arg("--force-sync")
         .assert()
@@ -125,10 +151,14 @@ api_key = test-key-123
     let config_file = tempfile::NamedTempFile::new().unwrap();
     fs::write(&config_file, config_content).unwrap();
 
+    let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
 
-    cmd.arg("--config")
+    cmd.env("HOME", home.path())
+        .arg("--config")
         .arg(config_file.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
         .arg("--offline-count")
         .assert()
         .success()
@@ -137,9 +167,13 @@ api_key = test-key-123
 
 #[test]
 fn test_offline_commands_with_verbose_logging() {
+    let home = tempfile::tempdir().unwrap();
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
 
-    cmd.arg("--offline-count")
+    cmd.env("HOME", home.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
+        .arg("--offline-count")
         .arg("--verbose")
         .assert()
         .success()
