@@ -170,7 +170,9 @@ pub struct Cli {
     #[arg(long)]
     pub project_folder: Option<String>,
 
-    /// Optional proxy configuration. Supports HTTPS SOCKS and NTLM proxies.
+    /// Optional proxy to send requests through, as a URL, e.g.
+    /// 'http://user:pass@host:port'. HTTP and HTTPS proxies are supported;
+    /// SOCKS and NTLM are not.
     #[arg(long)]
     pub proxy: Option<String>,
 

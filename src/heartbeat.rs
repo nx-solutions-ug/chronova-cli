@@ -302,8 +302,17 @@ impl HeartbeatManager {
     ///
     /// Returns `(synced, not_synced)`. Anything the server did not accept — a
     /// rejected entry, an entry it never mentioned, or a batch it asked us to
-    /// stop sending — counts as not synced, because callers such as
-    /// `ai_sync` decide whether to roll back on exactly that number.
+    /// stop sending — counts as not synced, *not* only the entries that have
+    /// exhausted their retries.
+    ///
+    /// That distinction is load-bearing. `ai_sync::sync_ai_activity` rolls its
+    /// batch back and holds `ai_logs_last_parsed_at` when
+    /// `synced_count == 0 && failed_count > 0`, and advances the cutoff
+    /// otherwise. If a batch the server silently dropped reported
+    /// `(0, 0)` instead, the cutoff would advance as though the work were done
+    /// while those heartbeats sat in a queue that the next `--entity`
+    /// invocation wipes (`HeartbeatManager::new`). The transcripts are the
+    /// durable store; this number is what decides whether to go back to them.
     async fn process_queue(&self) -> Result<(usize, usize), anyhow::Error> {
         // Process the queue in batches to avoid loading everything into memory at once.
         // Combine the "prepare retry-eligible failures" pass and the "fetch pending" call
@@ -419,6 +428,40 @@ impl HeartbeatManager {
                     Err(e) => {
                         // Handle batch-level errors: fall back to per-item retries with backoff for rate-limits
                         tracing::warn!("Batch sync failed: {}", e);
+
+                        if matches!(e, crate::api::ApiError::Auth(_)) {
+                            // The cascade already offered this key as Bearer,
+                            // Basic and X-API-Key and the server refused all
+                            // three, so the key is the problem. Falling back to
+                            // one request per heartbeat would re-run that
+                            // cascade for each of them — 50 heartbeats is 150
+                            // requests that cannot succeed, and the
+                            // failed-to-pending promotion would do it again on
+                            // the next pass. Put the batch back untouched.
+                            tracing::error!(
+                                "Authentication rejected for the whole batch ({}); leaving {} heartbeat(s) queued",
+                                e,
+                                queued.len()
+                            );
+                            total_failed += queued.len();
+                            requeue_pending(
+                                queued.iter().map(|h| h.id.clone()).collect(),
+                                "Authentication rejected; deferred until the credentials change",
+                            )
+                            .await?;
+
+                            // Report it, but only while nothing has synced yet.
+                            // `ai_sync` rolls the whole run back on an `Err`,
+                            // and rolling back heartbeats the server already
+                            // accepted would have them re-derived from the
+                            // transcripts and counted twice, since the API
+                            // mints its own ids and does not de-duplicate.
+                            if total_synced == 0 {
+                                return Err(e.into());
+                            }
+                            break;
+                        }
+
                         if let crate::api::ApiError::RateLimit { retry_after, .. } = &e {
                             // The server asked us to slow down. Re-sending the
                             // batch, or falling back to one request per
@@ -438,12 +481,10 @@ impl HeartbeatManager {
                             )
                             .await?;
                             break;
-                        } else {
-                            // For other errors, fall back to per-heartbeat send so we can granularly retry/mark permanent
-                            tracing::debug!(
-                                "Falling back to per-heartbeat sync after batch failure"
-                            );
                         }
+
+                        // For other errors, fall back to per-heartbeat send so we can granularly retry/mark permanent
+                        tracing::debug!("Falling back to per-heartbeat sync after batch failure");
                     }
                 }
             }
@@ -501,21 +542,35 @@ impl HeartbeatManager {
                         total_synced += 1;
                     }
                     Err(e) => {
-                        // Rate-limit handling: the server asked us to slow
-                        // down, so stop sending. Sleeping here would stall a
-                        // CLI the editor plugin re-invokes every minute, and
-                        // the rest of the batch has not been attempted, so
-                        // neither it nor this heartbeat has earned a retry.
-                        if let crate::api::ApiError::RateLimit { retry_after, .. } = &e {
-                            tracing::warn!(
-                                "Rate limited after {} heartbeat(s){}; leaving the rest queued",
-                                index,
-                                retry_after
-                                    .map(|d| format!(", retry after {}s", d.as_secs()))
-                                    .unwrap_or_default()
-                            );
-                            deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
-                            break;
+                        // Two answers mean "stop sending", not "try the next
+                        // one": the server asked us to slow down, or it refused
+                        // the key under every scheme. Sleeping would stall a CLI
+                        // the editor plugin re-invokes every minute, and pushing
+                        // on would re-run the three-scheme cascade for every
+                        // remaining heartbeat. Neither they nor this one have
+                        // earned a retry, so put them back untouched.
+                        match &e {
+                            crate::api::ApiError::RateLimit { retry_after, .. } => {
+                                tracing::warn!(
+                                    "Rate limited after {} heartbeat(s){}; leaving the rest queued",
+                                    index,
+                                    retry_after
+                                        .map(|d| format!(", retry after {}s", d.as_secs()))
+                                        .unwrap_or_default()
+                                );
+                                deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
+                                break;
+                            }
+                            crate::api::ApiError::Auth(_) => {
+                                tracing::error!(
+                                    "Authentication rejected after {} heartbeat(s) ({}); leaving the rest queued",
+                                    index,
+                                    e
+                                );
+                                deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
+                                break;
+                            }
+                            _ => {}
                         }
 
                         // Defer retry increment and status updates to a consolidated blocking operation
@@ -591,7 +646,7 @@ impl HeartbeatManager {
 
             if !deferred_ids.is_empty() {
                 total_failed += deferred_ids.len();
-                requeue_pending(deferred_ids, "Rate limited; deferred to the next sync").await?;
+                requeue_pending(deferred_ids, "Server told us to stop sending; deferred").await?;
                 break;
             }
         }
