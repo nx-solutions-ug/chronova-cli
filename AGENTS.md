@@ -122,12 +122,34 @@ payload while costing each literal a single line.
 
 Two behaviours that are easy to trip over and hard to notice:
 
-- **`HeartbeatManager::new()` empties the queue.** It calls
-  `queue.cleanup_old_entries(0)` (`heartbeat.rs:123`), and `max_age_days == 0`
-  is the special case that runs `DELETE FROM heartbeats` (`queue.rs:314-317`).
-  So constructing a manager discards every pending heartbeat. Use
-  `HeartbeatManager::new_with_queue` (`heartbeat.rs:136`) when the queue must
-  survive, and do not treat the queue as durable storage across invocations.
+- **The queue survives construction, but not forever — and a bare `Queue`,
+  by default, not ever.** `HeartbeatManager::new` (`heartbeat.rs:119`)
+  delegates to `new_with_queue` (`heartbeat.rs:136`), the single
+  construction path, and neither removes anything from the queue — a
+  heartbeat queued by a previous invocation is still there when the next
+  invocation constructs its own manager. `Queue::new`/`with_path` default to
+  `retention_days: None`, so a bare `Queue` never prunes on drop at all.
+  Retention is enforced from two places instead, both driven by the same
+  configured `sync_retention_days` (`config.rs:275`, default 7):
+  `new_with_queue` calls `Queue::set_retention_days` on the manager's own
+  queue, so that queue's `Drop for Queue` (`queue.rs:773`) prunes at that
+  window if it's ever dropped without reaching `process_queue` at all —
+  e.g. `--extra-heartbeats`, which only enqueues and never syncs. And on the
+  sync/flush path, `process_queue` runs `HeartbeatManager::enforce_retention`
+  (`heartbeat.rs:167`) inside `spawn_blocking` against a *transient*
+  `Queue::new()` — the same pattern every other blocking call in that
+  function uses, safe here specifically because that transient handle's own
+  `Drop` no longer prunes anything by default. `max_age_days == 0` is still
+  the special case that runs `DELETE FROM heartbeats` (`queue.rs:324-325`),
+  so neither path may ever reach it with a literal `0`: a configured `0`
+  means "skip retention" everywhere instead
+  (`Queue::retention_window` is the one guard both `enforce_retention` and
+  `set_retention_days` call, so the two can't drift). At
+  `sync_retention_days = 0`, there is also no size-based bound to fall back
+  on — `enforce_max_count` (`queue.rs:97`) has no caller anywhere in this
+  crate outside its own tests, in any configuration — so a `0`-retention
+  queue grows without limit. An explicit "clear the queue" caller, and the
+  test suite, may still call `cleanup_old_entries(0)` deliberately.
 
 - **`tracing` at INFO goes to stdout, not just the log file.** `setup_logging`
   adds a stdout layer in normal mode (`logger.rs:63-65`) and the default level

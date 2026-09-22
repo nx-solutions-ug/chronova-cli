@@ -155,21 +155,29 @@ pub struct OsInfo {
 }
 
 impl HeartbeatManager {
-    /// Build a manager on the shared on-disk queue.
-    ///
-    /// Note that this empties that queue; see `new_with_queue` when the queued
-    /// heartbeats must survive.
+    /// Construct a `HeartbeatManager` backed by the real on-disk queue
+    /// (`~/.chronova/queue.db`). Delegates to `new_with_queue`, which is the
+    /// single construction path — construction must never discard pending
+    /// heartbeats.
     pub fn new(config: Config) -> Result<Self, anyhow::Error> {
         let queue = Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-        // Ensure a fresh queue state for newly constructed managers (helps tests/isolation)
-        // Ignore any error here — best effort cleanup to avoid leaking state between runs.
-        let _ = queue.cleanup_old_entries(0);
-
         Self::new_with_queue(config, queue)
     }
 
-    /// Create a HeartbeatManager with a custom queue (useful for testing with isolated queues)
-    pub fn new_with_queue(config: Config, queue: Queue) -> Result<Self, anyhow::Error> {
+    /// Create a HeartbeatManager with a custom queue (useful for testing with isolated queues).
+    ///
+    /// Construction never removes anything from the queue: a heartbeat
+    /// queued by a previous invocation must still be there when the next
+    /// invocation constructs its own manager. Age-based retention while the
+    /// manager is alive is handled separately, from the sync/flush path
+    /// (see `enforce_retention`). What construction *does* do is set the
+    /// queue's own `retention_days` (`Queue::set_retention_days`) from the
+    /// configured `sync_retention_days`, so that if the queue is dropped
+    /// without ever reaching `process_queue` — e.g. `--extra-heartbeats`,
+    /// which only enqueues — `Queue`'s own `Drop` prunes at the same
+    /// configured window instead of a hardcoded one.
+    pub fn new_with_queue(config: Config, mut queue: Queue) -> Result<Self, anyhow::Error> {
+        queue.set_retention_days(config.sync_config.retention_days);
         // A bad proxy URL or certificate bundle is reported here rather than
         // silently ignored or turned into a panic.
         let api_client =
@@ -187,6 +195,34 @@ impl HeartbeatManager {
             queue,
             collector,
         })
+    }
+
+    /// Prune `queue` entries older than `retention_days` (the configured
+    /// `sync_retention_days`, default 7 — see `config.rs`). Called from the
+    /// sync/flush path on every `process_queue` run, never from
+    /// construction, and never with `max_age_days == 0` reaching
+    /// `cleanup_old_entries`, which deletes the entire queue regardless of
+    /// age — a configured `0` instead skips this entirely
+    /// (`Queue::retention_window` is the shared guard).
+    ///
+    /// Takes `queue` as a parameter rather than reading `self.queue` so
+    /// `process_queue` can run this inside `tokio::task::spawn_blocking`,
+    /// which requires a `'static` closure — a borrowed `&self` doesn't
+    /// qualify, but an owned, freshly-opened `Queue` does.
+    fn enforce_retention(queue: &Queue, retention_days: u32) {
+        match Queue::retention_window(retention_days) {
+            Some(days) => {
+                if let Err(e) = queue.cleanup_old_entries(days) {
+                    tracing::warn!("Failed to clean up old queue entries: {}", e);
+                }
+            }
+            None => {
+                tracing::debug!(
+                    "sync_retention_days ({}) is 0 or too large to apply; skipping retention cleanup",
+                    retention_days
+                );
+            }
+        }
     }
 
     pub async fn process(&self, mut cli: Cli) -> Result<(), anyhow::Error> {
@@ -360,6 +396,19 @@ impl HeartbeatManager {
     /// invocation wipes (`HeartbeatManager::new`). The transcripts are the
     /// durable store; this number is what decides whether to go back to them.
     async fn process_queue(&self) -> Result<(usize, usize), anyhow::Error> {
+        // Age-based retention runs once per flush, ahead of processing, via
+        // a transient `Queue::new()` inside `spawn_blocking` — the same
+        // pattern every other blocking call in this function uses. That
+        // transient queue defaults to `retention_days: None` (see
+        // `Queue::new`), so it doesn't also prune itself on drop; best
+        // effort (`let _ =`) because a failed prune shouldn't abort a sync.
+        let retention_days = self.config.sync_config.retention_days;
+        let _ = tokio::task::spawn_blocking(move || match crate::queue::Queue::new() {
+            Ok(q) => Self::enforce_retention(&q, retention_days),
+            Err(e) => tracing::warn!("Failed to open queue for retention cleanup: {}", e),
+        })
+        .await;
+
         // Process the queue in batches to avoid loading everything into memory at once.
         let batch_size: usize = 50;
 
@@ -824,6 +873,262 @@ mod tests {
         let manager =
             HeartbeatManager::new_with_queue(config, queue).expect("Failed to create test manager");
         (manager, temp_dir)
+    }
+
+    fn sample_heartbeat(id: &str) -> Heartbeat {
+        Heartbeat {
+            id: id.to_string(),
+            entity: "/path/to/file.rs".to_string(),
+            entity_type: "file".to_string(),
+            time: 1.0,
+            project: Some("p".to_string()),
+            branch: None,
+            language: Some("Rust".to_string()),
+            is_write: false,
+            lines: None,
+            lineno: None,
+            cursorpos: None,
+            user_agent: Some("test/1.0".to_string()),
+            category: Some("coding".to_string()),
+            machine: Some("m".to_string()),
+            editor: None,
+            operating_system: None,
+            commit_hash: None,
+            commit_author: None,
+            commit_message: None,
+            repository_url: None,
+            dependencies: Vec::new(),
+            ai: Default::default(),
+        }
+    }
+
+    /// Regression test for the finding: constructing a `HeartbeatManager`
+    /// must never discard heartbeats a previous invocation left queued.
+    /// This exercises `new_with_queue`, the shared construction logic `new`
+    /// delegates to — it does not exercise `new` itself, so it would stay
+    /// green even if a `cleanup_old_entries(0)` call were reintroduced
+    /// directly inside `new`'s own body. It's
+    /// `test_offline_count_reports_queued_heartbeats`
+    /// (`tests/cli_offline_commands.rs`), which calls `HeartbeatManager::new`
+    /// through the real binary, that would actually catch that.
+    #[test]
+    fn test_construction_does_not_wipe_pending_heartbeats() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("persist_queue.db");
+
+        let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+        let manager = HeartbeatManager::new_with_queue(Config::default(), queue)
+            .expect("Failed to create test manager");
+        manager
+            .queue
+            .add(sample_heartbeat("persist-1"))
+            .expect("Failed to queue heartbeat");
+        drop(manager);
+
+        // Simulate the next invocation: a brand new manager constructed
+        // against the same on-disk queue.
+        let reopened_queue = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let next_manager = HeartbeatManager::new_with_queue(Config::default(), reopened_queue)
+            .expect("Failed to create test manager");
+
+        let stats = next_manager
+            .get_queue_stats()
+            .expect("get_queue_stats should return Ok");
+        assert_eq!(
+            stats.total, 1,
+            "a heartbeat queued before construction must still be queued after it"
+        );
+    }
+
+    #[test]
+    fn test_retention_removes_only_entries_older_than_configured_days() {
+        let config = Config {
+            sync_config: crate::sync::SyncConfig {
+                retention_days: 3,
+                ..crate::sync::SyncConfig::default()
+            },
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let old = sample_heartbeat("old-entry");
+        let recent = sample_heartbeat("recent-entry");
+        manager
+            .queue
+            .add(old.clone())
+            .expect("Failed to queue old heartbeat");
+        manager
+            .queue
+            .add(recent.clone())
+            .expect("Failed to queue recent heartbeat");
+        manager
+            .queue
+            .backdate_for_test(&old.id, 5)
+            .expect("Failed to backdate old heartbeat");
+
+        HeartbeatManager::enforce_retention(
+            &manager.queue,
+            manager.config.sync_config.retention_days,
+        );
+
+        let stats = manager
+            .get_queue_stats()
+            .expect("get_queue_stats should return Ok");
+        assert_eq!(
+            stats.total, 1,
+            "only the entry older than the retention window should be removed"
+        );
+
+        let remaining = manager
+            .queue
+            .get_pending(Some(10), None)
+            .expect("get_pending should return Ok");
+        let remaining_ids: Vec<&str> = remaining.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            !remaining_ids.contains(&old.id.as_str()),
+            "entry older than the retention window must be removed"
+        );
+        assert!(
+            remaining_ids.contains(&recent.id.as_str()),
+            "entry within the retention window must survive"
+        );
+    }
+
+    /// A `sync_retention_days` of `0` must not be treated as
+    /// `cleanup_old_entries(0)`'s "delete everything" special case — that
+    /// special case is reserved for an explicit "clear the queue" caller.
+    /// This must hold both while `enforce_retention` runs during the
+    /// manager's life *and* when its `Queue` actually drops
+    /// (`Queue::set_retention_days` is what guards the drop path), so the
+    /// queue is dropped for real inside this test — via the inner scope
+    /// below — rather than kept alive until the assertion, which would only
+    /// prove the `enforce_retention` half of the guard.
+    #[test]
+    fn test_retention_with_zero_configured_days_does_not_wipe_the_queue() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("zero_retention_queue.db");
+
+        let config = Config {
+            sync_config: crate::sync::SyncConfig {
+                retention_days: 0,
+                ..crate::sync::SyncConfig::default()
+            },
+            ..Default::default()
+        };
+
+        {
+            let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+            let manager = HeartbeatManager::new_with_queue(config, queue)
+                .expect("Failed to create test manager");
+
+            let old = sample_heartbeat("old-entry-with-zero-retention");
+            manager
+                .queue
+                .add(old.clone())
+                .expect("Failed to queue heartbeat");
+            manager
+                .queue
+                .backdate_for_test(&old.id, 365)
+                .expect("Failed to backdate heartbeat");
+
+            HeartbeatManager::enforce_retention(
+                &manager.queue,
+                manager.config.sync_config.retention_days,
+            );
+
+            let stats = manager
+                .get_queue_stats()
+                .expect("get_queue_stats should return Ok");
+            assert_eq!(
+                stats.total, 1,
+                "retention_days == 0 must skip cleanup, not delete the whole queue"
+            );
+
+            // `manager`, and the `Queue` it owns, drop at the end of this
+            // block. That's the part of the property this test exists to
+            // pin: it isn't enough for `enforce_retention` to skip cleanup —
+            // `Drop` must too.
+        }
+
+        let reopened = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let count = reopened.count().expect("count should return Ok");
+        assert_eq!(
+            count, 1,
+            "Queue::drop must not wipe the queue when retention_days == 0"
+        );
+    }
+
+    /// A bare `Queue` — the kind `process_queue`'s other blocking calls, and
+    /// now its retention step too, open transiently via `Queue::new()` — must
+    /// default to no drop-time pruning at all, not the old hardcoded 7 days.
+    /// Uses `with_path` rather than the real `Queue::new()` so this stays
+    /// isolated from `$HOME`; both share the exact same default-construction
+    /// code path.
+    #[test]
+    fn test_transient_queue_does_not_prune_on_drop_by_default() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("transient_default_queue.db");
+
+        {
+            let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+            let very_old = sample_heartbeat("very-old-entry");
+            queue
+                .add(very_old.clone())
+                .expect("Failed to queue heartbeat");
+            queue
+                .backdate_for_test(&very_old.id, 365)
+                .expect("Failed to backdate heartbeat");
+
+            // `queue` drops here with its default `retention_days` (no
+            // `set_retention_days` call) — this must not prune anything.
+        }
+
+        let reopened = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let count = reopened.count().expect("count should return Ok");
+        assert_eq!(count, 1, "a bare Queue must not prune on drop by default");
+    }
+
+    /// The assertion the earlier "default 7" ruling should have required:
+    /// with a configured `sync_retention_days` of 30, an entry only 10 days
+    /// old must survive — it would not under the old hardcoded 7-day floor
+    /// any transient `Queue::new()` used to apply on every drop. A 40-day
+    /// control entry (older than the configured window either way) proves
+    /// retention actually ran at 30, rather than not running at all.
+    #[test]
+    fn test_enforce_retention_at_30_days_keeps_a_10_day_old_entry() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("thirty_day_retention_queue.db");
+        let queue = Queue::with_path(db_path).expect("Failed to create test queue");
+
+        let within_window = sample_heartbeat("ten-days-old");
+        let beyond_window = sample_heartbeat("forty-days-old-control");
+        queue
+            .add(within_window.clone())
+            .expect("Failed to queue 10-day-old heartbeat");
+        queue
+            .add(beyond_window.clone())
+            .expect("Failed to queue 40-day-old heartbeat");
+        queue
+            .backdate_for_test(&within_window.id, 10)
+            .expect("Failed to backdate 10-day-old heartbeat");
+        queue
+            .backdate_for_test(&beyond_window.id, 40)
+            .expect("Failed to backdate 40-day-old heartbeat");
+
+        HeartbeatManager::enforce_retention(&queue, 30);
+
+        let remaining = queue
+            .get_pending(Some(10), None)
+            .expect("get_pending should return Ok");
+        let remaining_ids: Vec<&str> = remaining.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            remaining_ids.contains(&within_window.id.as_str()),
+            "a 10-day-old entry must survive a configured 30-day retention window"
+        );
+        assert!(
+            !remaining_ids.contains(&beyond_window.id.as_str()),
+            "a 40-day-old entry must not survive a configured 30-day retention window"
+        );
     }
 
     #[test]

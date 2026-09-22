@@ -137,8 +137,9 @@ pub async fn sync_ai_activity(cli: &Cli, config: Config) -> Result<usize> {
     let count = queued_ids.len();
     tracing::info!("enqueuing {} ai heartbeat(s)", count);
 
-    // `Queue::new()` here rather than `HeartbeatManager::new()`, which calls
-    // `cleanup_old_entries(0)` and would wipe every pending heartbeat first.
+    // A `Queue` handle is needed here to enqueue the batch before the manager
+    // exists, so this opens one directly and passes it to
+    // `HeartbeatManager::new_with_queue` rather than `HeartbeatManager::new()`.
     let queue = Queue::new().context("failed to open offline queue")?;
     queue
         .add_batch(heartbeats)
@@ -149,12 +150,15 @@ pub async fn sync_ai_activity(cli: &Cli, config: Config) -> Result<usize> {
 
     // On a total failure, take the batch back out and leave the cutoff alone so
     // the next run re-derives it from the transcripts. Transcripts are the
-    // durable store; the queue is not, because any later `--entity` call
-    // constructs a `HeartbeatManager` and wipes it. Re-parsing is cheap, and
+    // real durable store: the queue only survives for `sync_retention_days`
+    // (`config.rs:275`, default 7) before retention cleanup prunes it — from
+    // `process_queue` on the sync/flush path, or from `Queue`'s own `Drop`
+    // as a fallback for callers that never reach `process_queue` at all
+    // (see AGENTS.md's Landmines section). Re-parsing is cheap, and
     // re-sending is harmless: the server de-duplicates on
     // `(userId, time, entity)`, and `time` comes from the transcript line.
-    // A partial success keeps its rows and advances anyway, so the common case
-    // does not lean on that.
+    // A partial success keeps its rows and advances, so retries cannot
+    // duplicate the heartbeats that did land.
     match outcome {
         Ok(result) if result.synced_count == 0 && result.failed_count > 0 => {
             tracing::warn!(

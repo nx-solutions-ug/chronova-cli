@@ -114,6 +114,14 @@ pub trait QueueOps {
 
 pub struct Queue {
     conn: Connection,
+    /// Retention window `Drop` applies when this queue goes out of scope.
+    /// A bare `Queue` (`new`/`with_path`) defaults to `None` — it never
+    /// prunes on drop. Only `HeartbeatManager::new_with_queue` arms this,
+    /// via `set_retention_days`, with the configured `sync_retention_days`.
+    /// `None` is also what a configured `0` maps to, so `Drop` can never
+    /// itself reach `cleanup_old_entries(0)`'s delete-everything special
+    /// case.
+    retention_days: Option<i32>,
 }
 
 impl QueueOps for Queue {
@@ -493,7 +501,10 @@ impl Queue {
         // Initialize the database
         Self::init_database(&conn)?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            retention_days: None,
+        })
     }
 
     /// Create a Queue with a custom database path for testing
@@ -503,7 +514,48 @@ impl Queue {
         // Initialize the database
         Self::init_database(&conn)?;
 
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            retention_days: None,
+        })
+    }
+
+    /// The `0`/overflow guard shared by `set_retention_days` and
+    /// `HeartbeatManager::enforce_retention`: `None` for a configured `0` or
+    /// a value too large to represent as `i32`, `Some(valid)` otherwise.
+    /// Centralised so the two call sites can't drift on what "skip
+    /// retention" means — both exist specifically so a configured `0` is
+    /// never confused with `cleanup_old_entries(0)`'s delete-everything
+    /// special case.
+    pub(crate) fn retention_window(days: u32) -> Option<i32> {
+        match i32::try_from(days) {
+            Ok(0) | Err(_) => None,
+            Ok(valid) => Some(valid),
+        }
+    }
+
+    /// Set the retention window `Drop` applies when this queue is dropped.
+    /// `HeartbeatManager::new_with_queue` calls this with the configured
+    /// `sync_retention_days` so `Drop`'s prune matches
+    /// `HeartbeatManager::enforce_retention`'s instead of never running (the
+    /// default) or running at a hardcoded floor (the earlier version of
+    /// this). A configured `0` disables pruning entirely — and since
+    /// nothing in this crate calls `enforce_max_count` in production, `0`
+    /// leaves the queue with no bound at all, not just no age-based one.
+    pub fn set_retention_days(&mut self, days: u32) {
+        self.retention_days = Self::retention_window(days);
+    }
+
+    /// Test-only: back-date a queued heartbeat's `created_at` so retention
+    /// cleanup tests (here and in other modules) can exercise entries that
+    /// are actually old, without reaching into the private `conn` field.
+    #[cfg(test)]
+    pub(crate) fn backdate_for_test(&self, id: &str, days: i64) -> Result<(), QueueError> {
+        self.conn.execute(
+            "UPDATE heartbeats SET created_at = datetime('now', ?1) WHERE id = ?2",
+            params![format!("-{} days", days), id],
+        )?;
+        Ok(())
     }
 
     /// Initialize database schema and indexes
@@ -720,8 +772,12 @@ impl Queue {
 
 impl Drop for Queue {
     fn drop(&mut self) {
-        // Clean up old entries on shutdown (older than 7 days)
-        let _ = self.cleanup_old_entries(7);
+        // Clean up old entries on shutdown, using the configured retention
+        // window (`set_retention_days`) rather than a hardcoded value.
+        // `None` (set for a configured `0`) skips this entirely.
+        if let Some(days) = self.retention_days {
+            let _ = self.cleanup_old_entries(days);
+        }
     }
 }
 
@@ -817,7 +873,13 @@ mod tests {
             [],
         )?;
 
-        Ok((temp_dir, Queue { conn }))
+        Ok((
+            temp_dir,
+            Queue {
+                conn,
+                retention_days: None,
+            },
+        ))
     }
 
     fn create_test_queue_with_new_schema() -> Result<(tempfile::TempDir, Queue), QueueError> {
@@ -839,7 +901,13 @@ mod tests {
             [],
         )?;
 
-        Ok((temp_dir, Queue { conn }))
+        Ok((
+            temp_dir,
+            Queue {
+                conn,
+                retention_days: None,
+            },
+        ))
     }
 
     #[test]
@@ -1004,7 +1072,13 @@ mod tests {
             [],
         )?;
 
-        Ok((temp_dir, Queue { conn }))
+        Ok((
+            temp_dir,
+            Queue {
+                conn,
+                retention_days: None,
+            },
+        ))
     }
 
     fn create_test_heartbeat(id: &str) -> Heartbeat {
@@ -1240,6 +1314,59 @@ mod tests {
         let removed = queue.cleanup_old_entries(1)?;
         assert_eq!(removed, 1);
         assert_eq!(queue.count()?, 0);
+
+        Ok(())
+    }
+
+    /// `Drop for Queue` must prune using whatever `set_retention_days` was
+    /// last called with, not the hardcoded `7` it used before. Proven with a
+    /// configured window (3 days) that disagrees with 7: an entry 5 days old
+    /// would survive a hardcoded 7-day floor but must not survive a
+    /// configured 3-day one.
+    #[test]
+    fn test_drop_prunes_at_the_configured_retention_days_not_a_hardcoded_seven(
+    ) -> Result<(), QueueError> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("drop_retention_queue.db");
+
+        let old_id;
+        let recent_id;
+        {
+            let mut queue = Queue::with_path(db_path.clone())?;
+            queue.set_retention_days(3);
+
+            let old = create_test_heartbeat("old-beyond-configured-retention");
+            let recent = create_test_heartbeat("recent-within-configured-retention");
+            old_id = old.id.clone();
+            recent_id = recent.id.clone();
+            queue.add(old)?;
+            queue.add(recent)?;
+
+            queue.conn.execute(
+                "UPDATE heartbeats SET created_at = datetime('now', '-5 days') WHERE id = ?1",
+                params![old_id],
+            )?;
+            queue.conn.execute(
+                "UPDATE heartbeats SET created_at = datetime('now', '-1 days') WHERE id = ?1",
+                params![recent_id],
+            )?;
+
+            // `queue` drops at the end of this block. If `Drop` still used a
+            // hardcoded 7, the 5-day-old entry (< 7) would survive; it must
+            // not, because the configured window is 3.
+        }
+
+        let reopened = Queue::with_path(db_path)?;
+        let remaining = reopened.get_pending(Some(10), None)?;
+        let remaining_ids: Vec<&str> = remaining.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            !remaining_ids.contains(&old_id.as_str()),
+            "Drop must prune entries older than the configured retention (3 days), not just a hardcoded 7"
+        );
+        assert!(
+            remaining_ids.contains(&recent_id.as_str()),
+            "Drop must not prune entries within the configured retention window"
+        );
 
         Ok(())
     }
