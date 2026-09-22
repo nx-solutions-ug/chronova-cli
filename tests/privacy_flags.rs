@@ -217,9 +217,40 @@ fn an_invalid_pattern_does_not_abort_the_run() {
     );
 }
 
+/// Project markers this codebase looks for when walking an entity's ancestors.
+const PROJECT_MARKERS: [&str; 6] = [
+    ".git",
+    ".wakatime-project",
+    "package.json",
+    "Cargo.toml",
+    "pyproject.toml",
+    "go.mod",
+];
+
+/// Assert that no ancestor of `path` carries a project marker.
+///
+/// The "nothing to strip" case depends on that being true, and a stray
+/// `Cargo.toml` in a shared temp directory would otherwise turn this test into
+/// a confusing failure somewhere else.
+fn assert_no_project_marker_above(path: &Path) {
+    let mut current = path.parent();
+    while let Some(dir) = current {
+        for marker in PROJECT_MARKERS {
+            assert!(
+                !dir.join(marker).exists(),
+                "test precondition: {} carries the project marker {}",
+                dir.display(),
+                marker
+            );
+        }
+        current = dir.parent();
+    }
+}
+
 #[test]
 fn hide_project_folder_warns_when_there_is_nothing_to_strip() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
+    assert_no_project_marker_above(Path::new(&run.entity));
     run.invoke(&["--hide-project-folder"]);
 
     assert!(
@@ -317,4 +348,43 @@ async fn hide_project_folder_makes_the_entity_relative() {
     };
 
     assert_eq!(heartbeat["entity"].as_str(), Some("secret.rs"));
+}
+
+/// `--extra-heartbeats` is the bulk door editor plugins use. It hands over
+/// fully built heartbeats, but their entity is still a real path, so
+/// `--hide-project-folder` has something to strip.
+#[test]
+fn extra_heartbeats_honour_hide_project_folder() {
+    let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "unused.rs");
+    let project = run.home.path().join("project");
+    fs::create_dir_all(project.join("src")).expect("project dirs");
+    fs::write(project.join("Cargo.toml"), "[package]").expect("project marker");
+    let entity = project.join("src").join("main.rs");
+    fs::write(&entity, "fn main() {}").expect("write entity");
+
+    let payload = format!(
+        r#"[{{"entity": "{}", "type": "file", "time": 1764432679.433,
+             "project": "project", "branch": "main", "language": "Rust",
+             "is_write": false, "dependencies": []}}]"#,
+        entity.to_string_lossy()
+    );
+
+    let mut cmd = Command::cargo_bin("chronova-cli").expect("binary built");
+    cmd.env("HOME", run.home.path())
+        .arg("--config")
+        .arg(run.home.path().join(".chronova.cfg"))
+        .arg("--extra-heartbeats")
+        .arg("--hide-project-folder")
+        .write_stdin(payload)
+        .assert()
+        .success();
+
+    let db = run.home.path().join(".chronova").join("queue.db");
+    let queued = Queue::with_path(db)
+        .expect("open queue")
+        .get_pending(None, None)
+        .expect("read queue");
+
+    assert_eq!(queued.len(), 1, "the heartbeat is kept, only shortened");
+    assert_eq!(queued[0].entity, "src/main.rs");
 }

@@ -1330,6 +1330,33 @@ impl<'a> BuildContext<'a> {
             }
         }
 
+        // Filtering matches a path. An `app` entity is the session id, not a
+        // path, so it filters on the cwd the line attributes its project from
+        // — the same fallback the git block below uses. Matching the session
+        // id instead would fail in both directions: an `exclude` for a
+        // repository would never drop that repository's `app` heartbeats, and
+        // an `include` of path patterns would drop every one of them.
+        let filter_path = if record.entity_type == "file" {
+            Some(record.entity.clone())
+        } else {
+            record
+                .project_dir
+                .clone()
+                .or_else(|| self.project_folder.map(|folder| folder.to_string()))
+        };
+
+        // Filter before anything else is looked up: a heartbeat that must not
+        // be sent should not cost a git or language probe either. Logging
+        // stays on `debug`, which reaches the file layer only, because a
+        // successful `--sync-ai-activity` run has to be byte-silent.
+        let allowed = filter_path
+            .as_deref()
+            .is_none_or(|path| self.sanitizer.allows_entity(path));
+        if !allowed || !self.sanitizer.allows_project(project.as_deref()) {
+            tracing::debug!("filtered out ai heartbeat for {}", record.entity);
+            return Vec::new();
+        }
+
         let language = if record.entity_type == "file" {
             self.language_for(&record.entity).await
         } else {
@@ -1424,17 +1451,7 @@ impl<'a> BuildContext<'a> {
             ai,
         };
 
-        // AI heartbeats carry real paths out of the transcripts, so they go
-        // through the same filtering and redaction as the `--entity` path.
-        // Logging stays on `debug`/`warn`, which reach the file layer only:
-        // a successful `--sync-ai-activity` run has to be byte-silent.
-        if !self.sanitizer.allows_entity(&heartbeat.entity)
-            || !self.sanitizer.allows_project(heartbeat.project.as_deref())
-        {
-            tracing::debug!("filtered out ai heartbeat for {}", heartbeat.entity);
-            return Vec::new();
-        }
-
+        // Redaction uses the same rules as the `--entity` path.
         let project_root = if self.sanitizer.strips_project_folder() {
             self.collector.containing_project_root(&heartbeat.entity)
         } else {
@@ -1590,6 +1607,58 @@ mod tests {
     }
 
     #[test]
+    fn an_app_heartbeat_is_excluded_by_its_repository_not_its_session_id() {
+        // The session id matches no path pattern, so filtering it directly
+        // would let an excluded repository's prompt and token telemetry out.
+        let config = Config {
+            ignore_patterns: vec!["/private-repo/".to_string()],
+            ..Config::default()
+        };
+
+        assert!(
+            build_all(
+                config,
+                record_at("Claude sess-1", "app", Some("/home/dev/private-repo/"))
+            )
+            .is_empty(),
+            "an app heartbeat from an excluded repository must be dropped"
+        );
+    }
+
+    #[test]
+    fn an_app_heartbeat_survives_a_repository_level_include() {
+        let config = Config {
+            include_patterns: vec!["/work-repo/".to_string()],
+            ..Config::default()
+        };
+        let built = build_all(
+            config,
+            record_at("Claude sess-1", "app", Some("/home/dev/work-repo/")),
+        );
+
+        assert_eq!(
+            built.len(),
+            1,
+            "an include list of path patterns must not drop app telemetry"
+        );
+        assert_eq!(built[0].entity, "Claude sess-1");
+    }
+
+    #[test]
+    fn an_app_heartbeat_without_a_path_to_match_is_allowed() {
+        let config = Config {
+            include_patterns: vec!["/work-repo/".to_string()],
+            ..Config::default()
+        };
+
+        assert_eq!(
+            build_all(config, record_at("Claude sess-1", "app", None)).len(),
+            1,
+            "nothing to match against means the filter cannot judge it"
+        );
+    }
+
+    #[test]
     fn an_include_list_that_does_not_match_yields_no_ai_heartbeat() {
         let dir = TempDir::new().unwrap();
         let repo_dir = repo_with_commit(&dir);
@@ -1718,7 +1787,7 @@ mod tests {
     }
 
     #[test]
-    fn each_hide_flag_suppresses_only_its_own_field() {
+    fn each_hide_flag_redacts_only_its_own_field() {
         let dir = TempDir::new().unwrap();
         let repo_dir = repo_with_commit(&dir);
         let file = repo_dir.join("README.md");

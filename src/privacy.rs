@@ -29,8 +29,10 @@ pub const HIDDEN: &str = "HIDDEN";
 /// matching one of them.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum HideRule {
+    /// Never redact; the setting is off.
     #[default]
     Never,
+    /// Redact every entity; the setting is on.
     Always,
     /// Redact only entities matching one of these patterns.
     Patterns(Vec<String>),

@@ -324,10 +324,36 @@ async fn main() -> Result<()> {
                 process::exit(1);
             });
 
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+
+        // Merge filtering and redaction flags from CLI: a flag the user typed
+        // must win over the config file, and CLI patterns add to the configured
+        // ones rather than replacing them, so a --exclude cannot silently
+        // un-exclude what the config file already hid.
+        if cli.hide_project_folder {
+            config.hide_project_folder = true;
+        }
+        if cli.exclude_unknown_project {
+            config.exclude_unknown_project = true;
+        }
+        if let Some(value) = &cli.hide_file_names {
+            config.hide_file_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_project_names {
+            config.hide_project_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_branch_names {
+            config.hide_branch_names = HideRule::parse(value);
+        }
+        if let Some(patterns) = &cli.exclude {
+            config.ignore_patterns.extend(patterns.iter().cloned());
+        }
+        if let Some(patterns) = &cli.include {
+            config.include_patterns.extend(patterns.iter().cloned());
+        }
 
         match chronova_cli::ai_sync::sync_ai_activity(&cli, config).await {
             Ok(count) => {

@@ -697,9 +697,15 @@ impl HeartbeatManager {
             return Ok(());
         }
 
-        // A heartbeat handed to us fully built carries no project root, so
-        // `--hide-project-folder` has nothing to strip against.
-        self.sanitizer.redact(&mut heartbeat, None);
+        // The entity is a real path, so the strip root is one lookup away —
+        // the same one `prepare_heartbeat` does.
+        let project_root = if self.sanitizer.strips_project_folder() {
+            self.collector.containing_project_root(&heartbeat.entity)
+        } else {
+            None
+        };
+        self.sanitizer
+            .redact(&mut heartbeat, project_root.as_deref());
 
         self.queue.add(heartbeat)?;
         tracing::debug!("Heartbeat queued for offline-first processing");
