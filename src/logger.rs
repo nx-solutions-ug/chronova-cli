@@ -21,18 +21,30 @@ pub fn setup_logging_with_output_format(
     setup_logging_with_options(verbose, json_output, None, false)
 }
 
-/// `json_output` suppresses the stdout layer so parsed output (e.g. `--output
-/// json`) stays clean; `log_to_stdout` (`--log-to-stdout`) adds it back even
-/// then. Callers that must stay byte-silent no matter what (`--sync-ai-activity`
-/// at `main.rs`) pass `log_to_stdout = false` themselves rather than forwarding
-/// the CLI flag. `log_file` overrides the default `~/.chronova.log` destination
-/// (`--log-file`).
+/// `json_output` forces file-only logging, unconditionally, for any path whose
+/// stdout is machine-parsed (`--output json`/`raw-json`, and `--sync-ai-activity`
+/// via the hardcoded `true` its `main.rs` call site passes). `log_to_stdout`
+/// (`--log-to-stdout`) is deliberately **not** able to override that: a caller
+/// mixing `--log-to-stdout` into a machine-readable invocation must not get log
+/// lines interleaved into the document it's trying to parse — same failure
+/// class as `--sync-ai-activity`'s plugin, just a different victim. Every other
+/// (human-facing) path already includes the stdout layer unconditionally,
+/// flag or no flag (see AGENTS.md's logging Landmine — out of scope here), so
+/// `log_to_stdout` has no code path where it currently changes the outcome; it
+/// stays a real, threaded-through parameter rather than being silently dropped,
+/// so a future machine-readable output has an unambiguous switch to opt into
+/// the same protection. `log_file` overrides the default `~/.chronova.log`
+/// destination (`--log-file`) and applies everywhere, unconditionally.
 pub fn setup_logging_with_options(
     verbose: bool,
     json_output: bool,
     log_file: Option<&str>,
     log_to_stdout: bool,
 ) -> Result<WorkerGuard, io::Error> {
+    // Not consulted below — see the doc comment above for why machine-readable
+    // output must win unconditionally regardless of this flag's value.
+    let _ = log_to_stdout;
+
     let log_file = resolve_log_file_path(log_file)?;
 
     // Create log file directory if it doesn't exist
@@ -61,7 +73,7 @@ pub fn setup_logging_with_options(
         .with_timer(ChronoLocalTimer)
         .with_filter(env_filter.clone());
 
-    if json_output && !log_to_stdout {
+    if json_output {
         // Only set up file logging and avoid any stdout contamination.
         let registry = tracing_subscriber::registry().with(file_layer);
         let _ = tracing::subscriber::set_global_default(registry);

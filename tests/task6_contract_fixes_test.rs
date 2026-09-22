@@ -2,7 +2,6 @@
 // --disable-offline (6a/6b) and the [not yet implemented] --help markers (6d).
 use assert_cmd::Command;
 use chronova_cli::queue::{Queue, QueueOps};
-use predicates::prelude::*;
 
 // An address that refuses connections immediately, matching the convention
 // already used in src/api.rs's own unit tests for forcing a network error.
@@ -123,44 +122,94 @@ fn sync_ai_activity_stays_byte_silent_on_success_even_with_log_to_stdout() {
     );
 }
 
+#[tokio::test]
+async fn log_to_stdout_cannot_break_output_json_parsing() {
+    // Corrected reading of the brief (coordinator sign-off): any path whose
+    // stdout is machine-parsed must stay clean, not just --sync-ai-activity.
+    // --output json is exactly that kind of path (main.rs prints a single
+    // JSON document with `print!`), so --log-to-stdout must be silently
+    // ignored here too — a caller who wants both logs and JSON uses
+    // --log-file instead. If stdout is anything other than that one JSON
+    // document, serde_json::from_str below fails.
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let mock_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/users/current/statusbar/today"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string(r#"{"text":"4 mins","has_team_features":false}"#),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let home = tempfile::tempdir().unwrap();
+    let config_path = home.path().join("chronova.cfg");
+    std::fs::write(
+        &config_path,
+        format!(
+            "[settings]\napi_key = test_key_123\napi_url = {}\n",
+            mock_server.uri()
+        ),
+    )
+    .unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    let assert = cmd
+        .env("HOME", home.path())
+        .arg("--today")
+        .arg("--verbose")
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--output")
+        .arg("json")
+        .arg("--log-to-stdout")
+        .assert()
+        .success();
+
+    let output = assert.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        panic!(
+            "stdout must stay valid, parseable JSON even with --log-to-stdout: {e}, got {stdout:?}"
+        )
+    });
+    assert_eq!(parsed["text"], "4 mins");
+}
+
 #[test]
-fn log_to_stdout_overrides_the_json_output_forced_file_only_mode() {
-    // The brief names exactly one exception to "--log-to-stdout adds the
-    // stdout layer": --sync-ai-activity (covered above). --output json is
-    // not that exception, so passing --log-to-stdout alongside it does add
-    // the stdout layer, contamination included — that's on the caller.
+fn log_to_stdout_stays_silent_on_the_json_forced_heartbeat_path() {
+    // `--today`'s success path (tested above) happens to emit no tracing
+    // calls at all, so that test alone can't prove contamination would be
+    // caught. The plain heartbeat path always logs via
+    // `tracing::info!("Heartbeat added to queue")` (queue.rs), which makes a
+    // reliable, independently-verified regression check: if --log-to-stdout
+    // ever regains the ability to override json_output, this line leaks onto
+    // stdout and the assertion below fails.
     let home = tempfile::tempdir().unwrap();
     let entity = home.path().join("main.rs");
     std::fs::write(&entity, "// test\n").unwrap();
 
     let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
-    cmd.env("HOME", home.path())
+    let assert = cmd
+        .env("HOME", home.path())
         .arg("--entity")
         .arg(&entity)
         .arg("--api-url")
         .arg(UNROUTABLE_API_URL)
         .arg("--output")
         .arg("json")
-        .assert()
-        .success()
-        .stdout(predicate::str::is_empty());
-
-    let home2 = tempfile::tempdir().unwrap();
-    let entity2 = home2.path().join("main.rs");
-    std::fs::write(&entity2, "// test\n").unwrap();
-
-    let mut cmd2 = Command::cargo_bin("chronova-cli").unwrap();
-    cmd2.env("HOME", home2.path())
-        .arg("--entity")
-        .arg(&entity2)
-        .arg("--api-url")
-        .arg(UNROUTABLE_API_URL)
-        .arg("--output")
-        .arg("json")
         .arg("--log-to-stdout")
         .assert()
-        .success()
-        .stdout(predicate::str::contains("Heartbeat added to queue"));
+        .success();
+
+    let output = assert.get_output();
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay empty on a json_output-forced path regardless of --log-to-stdout, got: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
 
 #[test]

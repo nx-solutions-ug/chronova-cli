@@ -264,9 +264,11 @@ async fn main() -> Result<()> {
     if cli.sync_ai_activity {
         // File-only logging: the calling plugin treats anything this process
         // writes to stdout/stderr as an error, so a successful run stays silent.
-        // --log-to-stdout is deliberately NOT forwarded here (hardcoded
-        // `false`) — this is the one path that must stay byte-silent no
-        // matter what the caller passes; --log-file is still honored.
+        // json_output = true already makes the logger ignore --log-to-stdout
+        // unconditionally (see setup_logging_with_options' doc comment), but
+        // this call also hardcodes `false` here as belt-and-braces for the
+        // one path that must never emit a byte to stdout; --log-file is still
+        // honored.
         let _guard = chronova_cli::logger::setup_logging_with_options(
             cli.verbose,
             true,
