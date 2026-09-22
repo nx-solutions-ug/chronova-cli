@@ -236,8 +236,11 @@ How to read the output:
   fails the build. If the file is not in this PR's diff it is pre-existing —
   note it in the review body rather than as a finding on a line nobody here
   wrote.
-- **`cargo fmt` failures**: one line in the review body naming the files. Do not
-  post per-line formatting comments.
+- **`cargo fmt` failures**: only the files this PR touched are this PR's to
+  report — one line in the review body naming them, and no per-line formatting
+  comments. A file the check names that is not in this PR's diff is pre-existing
+  or the environment's: note it in one clause, the way a pre-existing clippy
+  finding is noted, rather than spending a line of the review on it.
 - Clippy compiles the crate, so a type error surfaces here too, and it is
   blocking.
 
@@ -246,7 +249,10 @@ three operating systems.
 
 State in the review body which of these you actually ran. A review that claims
 verification it did not perform is worse than one that admits reading only the
-diff.
+diff. The same holds for causes: name one only from output you actually saw in
+this run. The CI action rewrites paths of its own before handing the PR over
+(`.claude/`, `.mcp.json`, `.claude-pr/`, `.husky/`) and logs that it did — that
+log line is not evidence that one of them broke a gate.
 
 ## Step 6: Mapping findings to diff lines
 
