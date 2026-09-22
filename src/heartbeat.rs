@@ -12,6 +12,49 @@ use crate::sync::{SyncResult, SyncStatusSummary};
 use crate::user_agent::generate_user_agent;
 use anyhow::Result;
 
+/// How many times a heartbeat is re-sent before the queue gives up on it.
+const MAX_SYNC_ATTEMPTS: u32 = 3;
+
+/// Why this failure means "stop sending" rather than "try the next one".
+///
+/// A rate limit is the server asking us to back off; a transport failure means
+/// we never reached it. Pushing on would repeat the same failure once per
+/// heartbeat and charge each of them one of its three attempts for a condition
+/// that is not its fault — a single offline invocation would exhaust the queue's
+/// whole retry budget.
+fn defer_reason(error: &crate::api::ApiError) -> Option<String> {
+    match error {
+        crate::api::ApiError::RateLimit { retry_after, .. } => Some(format!(
+            "Rate limited{}",
+            retry_after
+                .map(|d| format!(", retry after {}s", d.as_secs()))
+                .unwrap_or_default()
+        )),
+        crate::api::ApiError::Network(e) => Some(format!("Cannot reach the server ({})", e)),
+        _ => None,
+    }
+}
+
+/// Put heartbeats back on the queue as pending without touching their retry
+/// count: they were either never attempted, or the server asked us to come
+/// back later, and neither is the heartbeat's fault.
+async fn requeue_pending(ids: Vec<String>, reason: &str) -> Result<(), anyhow::Error> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let reason = reason.to_string();
+    tokio::task::spawn_blocking(move || -> Result<(), anyhow::Error> {
+        let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
+        for id in ids {
+            q.update_sync_status(&id, crate::sync::SyncStatus::Pending, Some(reason.clone()))
+                .map_err(|e| anyhow::anyhow!(e))?;
+        }
+        Ok(())
+    })
+    .await?
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Heartbeat {
     pub id: String,
@@ -122,40 +165,73 @@ fn resolve_project_name(
 }
 
 impl HeartbeatManager {
-    pub fn new(config: Config) -> Self {
-        let api_client = ApiClient::new(config.get_api_url());
-        let authenticated_api_client = config
-            .get_api_key(None)
-            .map(|key| api_client.clone().with_api_key(key));
-        let queue = Queue::new().expect("Failed to initialize queue");
-        // Ensure a fresh queue state for newly constructed managers (helps tests/isolation)
-        // Ignore any error here — best effort cleanup to avoid leaking state between runs.
-        let _ = queue.cleanup_old_entries(0);
-        let collector = DataCollector::new();
-
-        Self {
-            config,
-            api_client,
-            authenticated_api_client,
-            queue,
-            collector,
-        }
+    /// Construct a `HeartbeatManager` backed by the real on-disk queue
+    /// (`~/.chronova/queue.db`). Delegates to `new_with_queue`, which is the
+    /// single construction path — construction must never discard pending
+    /// heartbeats.
+    pub fn new(config: Config) -> Result<Self, anyhow::Error> {
+        let queue = Queue::new().map_err(|e| anyhow::anyhow!(e))?;
+        Self::new_with_queue(config, queue)
     }
 
-    /// Create a HeartbeatManager with a custom queue (useful for testing with isolated queues)
-    pub fn new_with_queue(config: Config, queue: Queue) -> Self {
-        let api_client = ApiClient::new(config.get_api_url());
+    /// Create a HeartbeatManager with a custom queue (useful for testing with isolated queues).
+    ///
+    /// Construction never removes anything from the queue: a heartbeat
+    /// queued by a previous invocation must still be there when the next
+    /// invocation constructs its own manager. Age-based retention while the
+    /// manager is alive is handled separately, from the sync/flush path
+    /// (see `enforce_retention`). What construction *does* do is set the
+    /// queue's own `retention_days` (`Queue::set_retention_days`) from the
+    /// configured `sync_retention_days`, so that if the queue is dropped
+    /// without ever reaching `process_queue` — e.g. `--extra-heartbeats`,
+    /// which only enqueues — `Queue`'s own `Drop` prunes at the same
+    /// configured window instead of a hardcoded one.
+    pub fn new_with_queue(config: Config, mut queue: Queue) -> Result<Self, anyhow::Error> {
+        queue.set_retention_days(config.sync_config.retention_days);
+        // A bad proxy URL or certificate bundle is reported here rather than
+        // silently ignored or turned into a panic.
+        let api_client =
+            ApiClient::with_transport(config.get_api_url(), &config.transport_options())
+                .map_err(|e| anyhow::anyhow!(e))?;
         let authenticated_api_client = config
             .get_api_key(None)
             .map(|key| api_client.clone().with_api_key(key));
         let collector = DataCollector::new();
 
-        Self {
+        Ok(Self {
             config,
             api_client,
             authenticated_api_client,
             queue,
             collector,
+        })
+    }
+
+    /// Prune `queue` entries older than `retention_days` (the configured
+    /// `sync_retention_days`, default 7 — see `config.rs`). Called from the
+    /// sync/flush path on every `process_queue` run, never from
+    /// construction, and never with `max_age_days == 0` reaching
+    /// `cleanup_old_entries`, which deletes the entire queue regardless of
+    /// age — a configured `0` instead skips this entirely
+    /// (`Queue::retention_window` is the shared guard).
+    ///
+    /// Takes `queue` as a parameter rather than reading `self.queue` so
+    /// `process_queue` can run this inside `tokio::task::spawn_blocking`,
+    /// which requires a `'static` closure — a borrowed `&self` doesn't
+    /// qualify, but an owned, freshly-opened `Queue` does.
+    fn enforce_retention(queue: &Queue, retention_days: u32) {
+        match Queue::retention_window(retention_days) {
+            Some(days) => {
+                if let Err(e) = queue.cleanup_old_entries(days) {
+                    tracing::warn!("Failed to clean up old queue entries: {}", e);
+                }
+            }
+            None => {
+                tracing::debug!(
+                    "sync_retention_days ({}) is 0 or too large to apply; skipping retention cleanup",
+                    retention_days
+                );
+            }
         }
     }
 
@@ -218,13 +294,33 @@ impl HeartbeatManager {
         .await??;
         tracing::debug!("Heartbeat queued for offline-first processing");
 
-        // Process any queued heartbeats using sync strategy
-        let (_synced_count, _failed_count) = self.process_queue().await?;
+        // Process any queued heartbeats using sync strategy.
+        //
+        // The heartbeat is already on disk, so a send that fails here is
+        // deferred, not lost, and this process exits 0. Editor plugins invoke
+        // the CLI once per keystroke batch; reporting a queued heartbeat as a
+        // failed run would have every one of them log an error for data that is
+        // safe. Non-zero exit is reserved for paths that actually drop data —
+        // `--disable-offline`, which never queues in the first place.
+        if let Err(e) = self.process_queue().await {
+            tracing::warn!(
+                "Queued heartbeats could not be sent yet ({}); they stay queued for the next run",
+                e
+            );
+        }
 
         Ok(())
     }
 
-    async fn create_heartbeat(&self, cli: Cli, entity: String) -> Result<Heartbeat, anyhow::Error> {
+    /// Builds a `Heartbeat` for `entity` from `cli`, collecting project,
+    /// git and language metadata for it. Public so callers outside this
+    /// module (the `--extra-heartbeats` path in `main.rs`) can reuse the
+    /// same construction the normal `process` flow uses.
+    pub async fn create_heartbeat(
+        &self,
+        cli: Cli,
+        entity: String,
+    ) -> Result<Heartbeat, anyhow::Error> {
         let time = cli
             .time
             .unwrap_or_else(|| chrono::Utc::now().timestamp_millis() as f64 / 1000.0);
@@ -324,39 +420,78 @@ impl HeartbeatManager {
         false
     }
 
+    /// Flush the offline queue, one batch at a time.
+    ///
+    /// Returns `(synced, not_synced)`. Anything the server did not accept but
+    /// might yet — an entry it never mentioned, or a batch it asked us to stop
+    /// sending — counts as not synced, *not* only the entries that have
+    /// exhausted their retries.
+    ///
+    /// A heartbeat the server refused outright with a `400` counts as neither.
+    /// It is dropped rather than retried, so it is not synced, but it is not
+    /// unfinished business either; counting it as failed would make a window the
+    /// server deliberately discarded look like a total failure and send
+    /// `ai_sync` back to re-derive it forever.
+    ///
+    /// That distinction is load-bearing. `ai_sync::sync_ai_activity` rolls its
+    /// batch back and holds `ai_logs_last_parsed_at` when
+    /// `synced_count == 0 && failed_count > 0`, and advances the cutoff
+    /// otherwise. If a batch the server silently dropped reported
+    /// `(0, 0)` instead, the cutoff would advance as though the work were done
+    /// while those heartbeats sat in a queue that the next `--entity`
+    /// invocation wipes (`HeartbeatManager::new`). The transcripts are the
+    /// durable store; this number is what decides whether to go back to them.
     async fn process_queue(&self) -> Result<(usize, usize), anyhow::Error> {
+        // Age-based retention runs once per flush, ahead of processing, via
+        // a transient `Queue::new()` inside `spawn_blocking` — the same
+        // pattern every other blocking call in this function uses. That
+        // transient queue defaults to `retention_days: None` (see
+        // `Queue::new`), so it doesn't also prune itself on drop; best
+        // effort (`let _ =`) because a failed prune shouldn't abort a sync.
+        let retention_days = self.config.sync_config.retention_days;
+        let _ = tokio::task::spawn_blocking(move || match crate::queue::Queue::new() {
+            Ok(q) => Self::enforce_retention(&q, retention_days),
+            Err(e) => tracing::warn!("Failed to open queue for retention cleanup: {}", e),
+        })
+        .await;
+
         // Process the queue in batches to avoid loading everything into memory at once.
-        // Combine the "prepare retry-eligible failures" pass and the "fetch pending" call
-        // into a single blocking task so the DB is opened only once per loop iteration.
         let batch_size: usize = 50;
 
         // Counters to return to callers
         let mut total_synced: usize = 0;
         let mut total_failed: usize = 0;
 
+        // Give heartbeats that failed in an *earlier* run another turn. This
+        // runs once, before the drain, and deliberately not inside the loop:
+        // promoting mid-drain would feed a heartbeat that just failed straight
+        // back into the next iteration, so one invocation would spend all three
+        // of its attempts on the same unreachable server instead of leaving two
+        // for later runs.
+        tokio::task::spawn_blocking(move || -> Result<(), anyhow::Error> {
+            let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
+            let failed = q
+                .get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            for hb in failed {
+                let current_retry_count = q.get_retry_count(&hb.id).unwrap_or(0);
+                if current_retry_count < MAX_SYNC_ATTEMPTS {
+                    q.update_sync_status(
+                        &hb.id,
+                        crate::sync::SyncStatus::Pending,
+                        Some(format!("Retry eligible (attempt {})", current_retry_count)),
+                    )
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                }
+            }
+            Ok(())
+        })
+        .await??;
+
         loop {
-            // Single blocking operation: prepare retry-eligible failed heartbeats and fetch a batch of pending
             let queued =
                 tokio::task::spawn_blocking(move || -> Result<Vec<Heartbeat>, anyhow::Error> {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-
-                    // Prepare failed -> pending for retry (single DB connection)
-                    let failed = q
-                        .get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed))
-                        .map_err(|e| anyhow::anyhow!(e))?;
-                    for hb in failed {
-                        let current_retry_count = q.get_retry_count(&hb.id).unwrap_or(0);
-                        if current_retry_count < 3 {
-                            q.update_sync_status(
-                                &hb.id,
-                                crate::sync::SyncStatus::Pending,
-                                Some(format!("Retry eligible (attempt {})", current_retry_count)),
-                            )
-                            .map_err(|e| anyhow::anyhow!(e))?;
-                        }
-                    }
-
-                    // Now fetch the next batch of pending heartbeats for processing
                     q.get_pending(Some(batch_size), None)
                         .map_err(|e| anyhow::anyhow!(e))
                 })
@@ -402,27 +537,36 @@ impl HeartbeatManager {
                 tracing::debug!("Batch send result success: {}", send_result.is_ok());
 
                 match send_result {
-                    Ok(_) => {
-                        // Success: mark all as synced and remove them (single blocking op)
-                        let queued_ids = queued.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
-                        let synced_len = queued.len();
-                        tokio::task::spawn_blocking(move || -> Result<(), anyhow::Error> {
-                            let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-                            for id in queued_ids {
-                                q.update_sync_status(
-                                    &id,
-                                    crate::sync::SyncStatus::Synced,
-                                    Some("Successfully synced".to_string()),
+                    Ok(outcome) => {
+                        // A bulk request can answer 2xx while dropping single
+                        // heartbeats, so only the ones the server named as
+                        // accepted may leave the queue; the rest stay for a
+                        // later attempt.
+                        let batch = queued.clone();
+                        let applied = tokio::task::spawn_blocking(
+                            move || -> Result<crate::sync::OutcomeApplied, anyhow::Error> {
+                                let q =
+                                    crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
+                                crate::sync::apply_batch_outcome(
+                                    &q,
+                                    &batch,
+                                    &outcome,
+                                    MAX_SYNC_ATTEMPTS,
                                 )
-                                .map_err(|e| anyhow::anyhow!(e))?;
-                                q.remove(&id).map_err(|e| anyhow::anyhow!(e))?;
-                            }
-                            Ok(())
-                        })
+                                .map_err(|e| anyhow::anyhow!(e))
+                            },
+                        )
                         .await??;
 
-                        // Account for synced items
-                        total_synced += synced_len;
+                        if applied.permanent > 0 {
+                            tracing::warn!(
+                                "{} heartbeat(s) exhausted their {} attempts and were given up on",
+                                applied.permanent,
+                                MAX_SYNC_ATTEMPTS
+                            );
+                        }
+                        total_synced += applied.accepted;
+                        total_failed += applied.failed;
 
                         // Continue to next batch
                         continue;
@@ -430,23 +574,53 @@ impl HeartbeatManager {
                     Err(e) => {
                         // Handle batch-level errors: fall back to per-item retries with backoff for rate-limits
                         tracing::warn!("Batch sync failed: {}", e);
-                        if let crate::api::ApiError::RateLimit(_) = e {
-                            // Simple backoff strategy: wait based on queue size to avoid hammering the server
-                            // Note: use bounded backoff here to avoid long blocking in caller
-                            let backoff_secs = 60u64; // base 60s for rate-limits on batch failure
-                            tracing::warn!(
-                                "Rate limited on batch sync, sleeping {}s before retrying batch",
-                                backoff_secs
+
+                        if matches!(e, crate::api::ApiError::Auth(_)) {
+                            // The cascade already offered this key as Bearer,
+                            // Basic and X-API-Key and the server refused all
+                            // three, so the key is the problem. Falling back to
+                            // one request per heartbeat would re-run that
+                            // cascade for each of them — 50 heartbeats is 150
+                            // requests that cannot succeed, and the
+                            // failed-to-pending promotion would do it again on
+                            // the next pass. Put the batch back untouched and
+                            // report it; the counts go with the error, so a
+                            // caller that retries re-derives them from scratch.
+                            tracing::error!(
+                                "Authentication rejected for the whole batch ({}); leaving {} heartbeat(s) queued",
+                                e,
+                                queued.len()
                             );
-                            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
-                            // After sleeping, retry this batch once more (will loop)
-                            continue;
-                        } else {
-                            // For other errors, fall back to per-heartbeat send so we can granularly retry/mark permanent
-                            tracing::debug!(
-                                "Falling back to per-heartbeat sync after batch failure"
-                            );
+                            requeue_pending(
+                                queued.iter().map(|h| h.id.clone()).collect(),
+                                "Authentication rejected; deferred until the credentials change",
+                            )
+                            .await?;
+
+                            return Err(e.into());
                         }
+
+                        if let Some(reason) = defer_reason(&e) {
+                            // Falling back to one request per heartbeat would
+                            // be the opposite of backing off, and against an
+                            // unreachable server it just repeats the same
+                            // failure fifty more times.
+                            tracing::warn!(
+                                "{} on batch sync; leaving {} heartbeat(s) queued",
+                                reason,
+                                queued.len()
+                            );
+                            total_failed += queued.len();
+                            requeue_pending(
+                                queued.iter().map(|h| h.id.clone()).collect(),
+                                &format!("{}; deferred to the next sync", reason),
+                            )
+                            .await?;
+                            break;
+                        }
+
+                        // For other errors, fall back to per-heartbeat send so we can granularly retry/mark permanent
+                        tracing::debug!("Falling back to per-heartbeat sync after batch failure");
                     }
                 }
             }
@@ -456,12 +630,11 @@ impl HeartbeatManager {
             let mut synced_ids: Vec<String> = Vec::new();
             // Collect failed items (id, error) to update retry counts/statuses in one DB op.
             let mut failed_updates: Vec<(String, String)> = Vec::new();
-            // Prefetch retry counts and mark items as Syncing in a single blocking operation to avoid per-item DB opens.
-            let retry_map: std::collections::HashMap<String, u32> = tokio::task::spawn_blocking({
+            // Mark every item as Syncing in a single blocking operation to avoid per-item DB opens.
+            tokio::task::spawn_blocking({
                 let ids = queued.iter().map(|h| h.id.clone()).collect::<Vec<_>>();
-                move || -> Result<std::collections::HashMap<String, u32>, anyhow::Error> {
+                move || -> Result<(), anyhow::Error> {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-                    let mut map = std::collections::HashMap::new();
                     for id in ids {
                         let rc = q.get_retry_count(&id).unwrap_or(0);
                         // Best-effort: mark as syncing with next attempt info
@@ -470,24 +643,23 @@ impl HeartbeatManager {
                             crate::sync::SyncStatus::Syncing,
                             Some(format!("Attempting sync (attempt {})", rc + 1)),
                         );
-                        map.insert(id.clone(), rc);
                     }
-                    Ok(map)
+                    Ok(())
                 }
             })
             .await??;
-            for heartbeat in queued {
-                // Use prefetched retry count and previously set syncing status
-                let retry_count: u32 = *retry_map.get(&heartbeat.id).unwrap_or(&0);
-
+            // Set when the server rate-limits us mid-batch: the rest of the
+            // batch is put back and left to a later flush.
+            let mut deferred_ids: Vec<String> = Vec::new();
+            for (index, heartbeat) in queued.iter().enumerate() {
                 tracing::debug!(
                     "Attempting individual send for heartbeat id: {}",
                     heartbeat.id
                 );
                 let send_result = if let Some(auth_client) = &self.authenticated_api_client {
-                    auth_client.send_heartbeat(&heartbeat).await
+                    auth_client.send_heartbeat(heartbeat).await
                 } else {
-                    self.api_client.send_heartbeat(&heartbeat).await
+                    self.api_client.send_heartbeat(heartbeat).await
                 };
                 tracing::debug!(
                     "Individual send result for {} success: {}",
@@ -506,34 +678,35 @@ impl HeartbeatManager {
                         total_synced += 1;
                     }
                     Err(e) => {
-                        // Rate-limit handling: apply backoff and retry in-memory once before incrementing retry count
-                        if let crate::api::ApiError::RateLimit(_) = e {
-                            let backoff_secs = 2u64.pow(std::cmp::min(retry_count as u32, 6)) * 5; // exponential backoff capped
-                            tracing::warn!(
-                                "Heartbeat {} rate-limited, backing off {}s before retry",
-                                heartbeat.id,
-                                backoff_secs
+                        // Some answers mean "stop sending", not "try the next
+                        // one": the server asked us to slow down, refused the
+                        // key under every scheme, or never answered at all.
+                        // Sleeping would stall a CLI the editor plugin
+                        // re-invokes every minute, and pushing on would repeat
+                        // the same failure for every remaining heartbeat and
+                        // spend an attempt on each. None of them has earned
+                        // that, so they go back untouched.
+                        let stop = if matches!(e, crate::api::ApiError::Auth(_)) {
+                            tracing::error!(
+                                "Authentication rejected after {} heartbeat(s) ({}); leaving the rest queued",
+                                index,
+                                e
                             );
-                            tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)).await;
+                            true
+                        } else if let Some(reason) = defer_reason(&e) {
+                            tracing::warn!(
+                                "{} after {} heartbeat(s); leaving the rest queued",
+                                reason,
+                                index
+                            );
+                            true
+                        } else {
+                            false
+                        };
 
-                            // Try once more after backoff
-                            let retry_send =
-                                if let Some(auth_client) = &self.authenticated_api_client {
-                                    auth_client.send_heartbeat(&heartbeat).await
-                                } else {
-                                    self.api_client.send_heartbeat(&heartbeat).await
-                                };
-
-                            if retry_send.is_ok() {
-                                // Defer final DB update/removal to the consolidated batch finalization.
-                                // This avoids opening the DB in a per-item blocking task even in the rare backoff-success path.
-                                let id = heartbeat.id.clone();
-                                tracing::debug!("Successfully synced queued heartbeat after backoff (deferring DB update): {}", id);
-                                synced_ids.push(id);
-                                total_synced += 1;
-                                continue;
-                            }
-                            // If still failing, fallthrough to increment retry below
+                        if stop {
+                            deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
+                            break;
                         }
 
                         // Defer retry increment and status updates to a consolidated blocking operation
@@ -556,7 +729,7 @@ impl HeartbeatManager {
                             // Increment retry and read new count
                             let _ = q.increment_retry(&id);
                             let rc = q.get_retry_count(&id).unwrap_or(0);
-                            if rc >= 3 {
+                            if rc >= MAX_SYNC_ATTEMPTS {
                                 let _ = q.update_sync_status(
                                     &id,
                                     crate::sync::SyncStatus::PermanentFailure,
@@ -578,8 +751,14 @@ impl HeartbeatManager {
                     })
                     .await??;
 
-                // Account for newly permanent failures
-                total_failed += perm_count;
+                if perm_count > 0 {
+                    tracing::warn!(
+                        "{} heartbeat(s) exhausted their {} attempts and were given up on",
+                        perm_count,
+                        MAX_SYNC_ATTEMPTS
+                    );
+                }
+                total_failed += failed_updates.len();
             }
 
             // Apply final DB updates for all successfully synced ids in one blocking operation
@@ -599,6 +778,12 @@ impl HeartbeatManager {
                     Ok(())
                 })
                 .await??;
+            }
+
+            if !deferred_ids.is_empty() {
+                total_failed += deferred_ids.len();
+                requeue_pending(deferred_ids, "Send deferred to the next sync").await?;
+                break;
             }
         }
 
@@ -760,8 +945,265 @@ mod tests {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db_path = temp_dir.path().join("test_queue.db");
         let queue = Queue::with_path(db_path).expect("Failed to create test queue");
-        let manager = HeartbeatManager::new_with_queue(config, queue);
+        let manager =
+            HeartbeatManager::new_with_queue(config, queue).expect("Failed to create test manager");
         (manager, temp_dir)
+    }
+
+    fn sample_heartbeat(id: &str) -> Heartbeat {
+        Heartbeat {
+            id: id.to_string(),
+            entity: "/path/to/file.rs".to_string(),
+            entity_type: "file".to_string(),
+            time: 1.0,
+            project: Some("p".to_string()),
+            branch: None,
+            language: Some("Rust".to_string()),
+            is_write: false,
+            lines: None,
+            lineno: None,
+            cursorpos: None,
+            user_agent: Some("test/1.0".to_string()),
+            category: Some("coding".to_string()),
+            machine: Some("m".to_string()),
+            editor: None,
+            operating_system: None,
+            commit_hash: None,
+            commit_author: None,
+            commit_message: None,
+            repository_url: None,
+            dependencies: Vec::new(),
+            ai: Default::default(),
+        }
+    }
+
+    /// Regression test for the finding: constructing a `HeartbeatManager`
+    /// must never discard heartbeats a previous invocation left queued.
+    /// This exercises `new_with_queue`, the shared construction logic `new`
+    /// delegates to — it does not exercise `new` itself, so it would stay
+    /// green even if a `cleanup_old_entries(0)` call were reintroduced
+    /// directly inside `new`'s own body. It's
+    /// `test_offline_count_reports_queued_heartbeats`
+    /// (`tests/cli_offline_commands.rs`), which calls `HeartbeatManager::new`
+    /// through the real binary, that would actually catch that.
+    #[test]
+    fn test_construction_does_not_wipe_pending_heartbeats() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("persist_queue.db");
+
+        let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+        let manager = HeartbeatManager::new_with_queue(Config::default(), queue)
+            .expect("Failed to create test manager");
+        manager
+            .queue
+            .add(sample_heartbeat("persist-1"))
+            .expect("Failed to queue heartbeat");
+        drop(manager);
+
+        // Simulate the next invocation: a brand new manager constructed
+        // against the same on-disk queue.
+        let reopened_queue = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let next_manager = HeartbeatManager::new_with_queue(Config::default(), reopened_queue)
+            .expect("Failed to create test manager");
+
+        let stats = next_manager
+            .get_queue_stats()
+            .expect("get_queue_stats should return Ok");
+        assert_eq!(
+            stats.total, 1,
+            "a heartbeat queued before construction must still be queued after it"
+        );
+    }
+
+    #[test]
+    fn test_retention_removes_only_entries_older_than_configured_days() {
+        let config = Config {
+            sync_config: crate::sync::SyncConfig {
+                retention_days: 3,
+                ..crate::sync::SyncConfig::default()
+            },
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let old = sample_heartbeat("old-entry");
+        let recent = sample_heartbeat("recent-entry");
+        manager
+            .queue
+            .add(old.clone())
+            .expect("Failed to queue old heartbeat");
+        manager
+            .queue
+            .add(recent.clone())
+            .expect("Failed to queue recent heartbeat");
+        manager
+            .queue
+            .backdate_for_test(&old.id, 5)
+            .expect("Failed to backdate old heartbeat");
+
+        HeartbeatManager::enforce_retention(
+            &manager.queue,
+            manager.config.sync_config.retention_days,
+        );
+
+        let stats = manager
+            .get_queue_stats()
+            .expect("get_queue_stats should return Ok");
+        assert_eq!(
+            stats.total, 1,
+            "only the entry older than the retention window should be removed"
+        );
+
+        let remaining = manager
+            .queue
+            .get_pending(Some(10), None)
+            .expect("get_pending should return Ok");
+        let remaining_ids: Vec<&str> = remaining.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            !remaining_ids.contains(&old.id.as_str()),
+            "entry older than the retention window must be removed"
+        );
+        assert!(
+            remaining_ids.contains(&recent.id.as_str()),
+            "entry within the retention window must survive"
+        );
+    }
+
+    /// A `sync_retention_days` of `0` must not be treated as
+    /// `cleanup_old_entries(0)`'s "delete everything" special case — that
+    /// special case is reserved for an explicit "clear the queue" caller.
+    /// This must hold both while `enforce_retention` runs during the
+    /// manager's life *and* when its `Queue` actually drops
+    /// (`Queue::set_retention_days` is what guards the drop path), so the
+    /// queue is dropped for real inside this test — via the inner scope
+    /// below — rather than kept alive until the assertion, which would only
+    /// prove the `enforce_retention` half of the guard.
+    #[test]
+    fn test_retention_with_zero_configured_days_does_not_wipe_the_queue() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("zero_retention_queue.db");
+
+        let config = Config {
+            sync_config: crate::sync::SyncConfig {
+                retention_days: 0,
+                ..crate::sync::SyncConfig::default()
+            },
+            ..Default::default()
+        };
+
+        {
+            let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+            let manager = HeartbeatManager::new_with_queue(config, queue)
+                .expect("Failed to create test manager");
+
+            let old = sample_heartbeat("old-entry-with-zero-retention");
+            manager
+                .queue
+                .add(old.clone())
+                .expect("Failed to queue heartbeat");
+            manager
+                .queue
+                .backdate_for_test(&old.id, 365)
+                .expect("Failed to backdate heartbeat");
+
+            HeartbeatManager::enforce_retention(
+                &manager.queue,
+                manager.config.sync_config.retention_days,
+            );
+
+            let stats = manager
+                .get_queue_stats()
+                .expect("get_queue_stats should return Ok");
+            assert_eq!(
+                stats.total, 1,
+                "retention_days == 0 must skip cleanup, not delete the whole queue"
+            );
+
+            // `manager`, and the `Queue` it owns, drop at the end of this
+            // block. That's the part of the property this test exists to
+            // pin: it isn't enough for `enforce_retention` to skip cleanup —
+            // `Drop` must too.
+        }
+
+        let reopened = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let count = reopened.count().expect("count should return Ok");
+        assert_eq!(
+            count, 1,
+            "Queue::drop must not wipe the queue when retention_days == 0"
+        );
+    }
+
+    /// A bare `Queue` — the kind `process_queue`'s other blocking calls, and
+    /// now its retention step too, open transiently via `Queue::new()` — must
+    /// default to no drop-time pruning at all, not the old hardcoded 7 days.
+    /// Uses `with_path` rather than the real `Queue::new()` so this stays
+    /// isolated from `$HOME`; both share the exact same default-construction
+    /// code path.
+    #[test]
+    fn test_transient_queue_does_not_prune_on_drop_by_default() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("transient_default_queue.db");
+
+        {
+            let queue = Queue::with_path(db_path.clone()).expect("Failed to create test queue");
+            let very_old = sample_heartbeat("very-old-entry");
+            queue
+                .add(very_old.clone())
+                .expect("Failed to queue heartbeat");
+            queue
+                .backdate_for_test(&very_old.id, 365)
+                .expect("Failed to backdate heartbeat");
+
+            // `queue` drops here with its default `retention_days` (no
+            // `set_retention_days` call) — this must not prune anything.
+        }
+
+        let reopened = Queue::with_path(db_path).expect("Failed to reopen test queue");
+        let count = reopened.count().expect("count should return Ok");
+        assert_eq!(count, 1, "a bare Queue must not prune on drop by default");
+    }
+
+    /// The assertion the earlier "default 7" ruling should have required:
+    /// with a configured `sync_retention_days` of 30, an entry only 10 days
+    /// old must survive — it would not under the old hardcoded 7-day floor
+    /// any transient `Queue::new()` used to apply on every drop. A 40-day
+    /// control entry (older than the configured window either way) proves
+    /// retention actually ran at 30, rather than not running at all.
+    #[test]
+    fn test_enforce_retention_at_30_days_keeps_a_10_day_old_entry() {
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let db_path = temp_dir.path().join("thirty_day_retention_queue.db");
+        let queue = Queue::with_path(db_path).expect("Failed to create test queue");
+
+        let within_window = sample_heartbeat("ten-days-old");
+        let beyond_window = sample_heartbeat("forty-days-old-control");
+        queue
+            .add(within_window.clone())
+            .expect("Failed to queue 10-day-old heartbeat");
+        queue
+            .add(beyond_window.clone())
+            .expect("Failed to queue 40-day-old heartbeat");
+        queue
+            .backdate_for_test(&within_window.id, 10)
+            .expect("Failed to backdate 10-day-old heartbeat");
+        queue
+            .backdate_for_test(&beyond_window.id, 40)
+            .expect("Failed to backdate 40-day-old heartbeat");
+
+        HeartbeatManager::enforce_retention(&queue, 30);
+
+        let remaining = queue
+            .get_pending(Some(10), None)
+            .expect("get_pending should return Ok");
+        let remaining_ids: Vec<&str> = remaining.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            remaining_ids.contains(&within_window.id.as_str()),
+            "a 10-day-old entry must survive a configured 30-day retention window"
+        );
+        assert!(
+            !remaining_ids.contains(&beyond_window.id.as_str()),
+            "a 40-day-old entry must not survive a configured 30-day retention window"
+        );
     }
 
     #[test]

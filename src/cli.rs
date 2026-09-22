@@ -55,8 +55,8 @@ pub struct Cli {
     pub config: String,
 
     /// Number of seconds to wait when sending heartbeats to api. Defaults to 30 seconds.
-    #[arg(long, default_value = "30")]
-    pub timeout: u64,
+    #[arg(long)]
+    pub timeout: Option<u64>,
 
     /// Turns on debug messages in log file, and sends diagnostics if a crash occurs.
     #[arg(long)]
@@ -170,7 +170,9 @@ pub struct Cli {
     #[arg(long)]
     pub project_folder: Option<String>,
 
-    /// Optional proxy configuration. Supports HTTPS SOCKS and NTLM proxies.
+    /// Optional proxy to send requests through, as a URL, e.g.
+    /// 'http://user:pass@host:port'. HTTP and HTTPS proxies are supported;
+    /// SOCKS and NTLM are not.
     #[arg(long)]
     pub proxy: Option<String>,
 
