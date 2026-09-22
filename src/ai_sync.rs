@@ -140,7 +140,7 @@ pub async fn sync_ai_activity(cli: &Cli, config: Config) -> Result<usize> {
         .add_batch(heartbeats)
         .context("failed to enqueue ai heartbeats")?;
 
-    let manager = HeartbeatManager::new_with_queue(config, queue);
+    let manager = HeartbeatManager::new_with_queue(config, queue)?;
     let outcome = manager.manual_sync().await;
 
     // On a total failure, take the batch back out and leave the cutoff alone so

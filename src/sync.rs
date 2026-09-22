@@ -5,7 +5,8 @@ use std::time::{Duration, Instant, SystemTime};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
-use crate::api::ApiClient;
+use crate::api::{ApiClient, ApiError, BatchEntryStatus, BatchSendOutcome};
+use crate::heartbeat::Heartbeat;
 use crate::queue::QueueOps;
 
 /// Represents the synchronization status of a heartbeat
@@ -106,6 +107,98 @@ pub enum SyncError {
     Config(String),
     #[error("Unknown error: {0}")]
     Unknown(String),
+}
+
+impl From<ApiError> for SyncError {
+    fn from(error: ApiError) -> Self {
+        match error {
+            ApiError::Auth(msg) => SyncError::Auth(msg),
+            ApiError::RateLimit { message, .. } => SyncError::RateLimit(message),
+            ApiError::ClientBuild(msg) => SyncError::Config(msg),
+            // `SyncError` has no finer split than "retryable network trouble",
+            // and a rejected request is bounded by the queue's retry counter
+            // rather than by this mapping.
+            other => SyncError::Network(format!("{}", other)),
+        }
+    }
+}
+
+/// What applying a bulk send's outcome did to the queue.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OutcomeApplied {
+    /// Heartbeats the server accepted; these were removed from the queue.
+    pub accepted: usize,
+    /// Heartbeats that stayed queued because the server did not accept them.
+    pub failed: usize,
+    /// How many of `failed` have now exhausted their retries.
+    pub permanent: usize,
+}
+
+/// Apply a bulk send's per-heartbeat outcome to the offline queue.
+///
+/// Accepted heartbeats are marked synced and removed. Rejected and unmatched
+/// ones keep their place in the queue with their retry count incremented, so a
+/// later flush tries them again instead of losing them to a batch that only
+/// looked successful from the outside.
+pub fn apply_batch_outcome<Q: QueueOps>(
+    queue: &Q,
+    batch: &[Heartbeat],
+    outcome: &BatchSendOutcome,
+    max_attempts: u32,
+) -> Result<OutcomeApplied, SyncError> {
+    debug_assert_eq!(batch.len(), outcome.entries().len());
+
+    let to_db = |e: crate::queue::QueueError| SyncError::Database(format!("{}", e));
+    let mut applied = OutcomeApplied::default();
+
+    for (heartbeat, entry) in batch.iter().zip(outcome.entries()) {
+        let id = &heartbeat.id;
+
+        if entry.is_accepted() {
+            queue
+                .update_sync_status(id, SyncStatus::Synced, Some("synced".to_string()))
+                .map_err(to_db)?;
+            queue.remove(id).map_err(to_db)?;
+            applied.accepted += 1;
+            continue;
+        }
+
+        let reason = match entry {
+            BatchEntryStatus::Rejected(status) => {
+                format!("server rejected this heartbeat with {}", status)
+            }
+            _ => "server reported no result for this heartbeat".to_string(),
+        };
+
+        queue.increment_retry(id).map_err(to_db)?;
+        let retries = queue.get_retry_count(id).unwrap_or(0);
+
+        if retries >= max_attempts {
+            queue
+                .update_sync_status(
+                    id,
+                    SyncStatus::PermanentFailure,
+                    Some(format!(
+                        "Permanent failure after {} attempts: {}",
+                        retries, reason
+                    )),
+                )
+                .map_err(to_db)?;
+            applied.permanent += 1;
+        } else {
+            queue
+                .update_sync_status(
+                    id,
+                    SyncStatus::Failed,
+                    Some(format!("Sync failed (attempt {}): {}", retries, reason)),
+                )
+                .map_err(to_db)?;
+        }
+
+        applied.failed += 1;
+    }
+
+    Ok(applied)
 }
 
 /// Configuration for retry strategy with exponential backoff and jitter
@@ -730,43 +823,28 @@ impl SyncManager for ChronovaSyncManager {
             let batch_start = Instant::now();
 
             match self.api_client.send_heartbeats_batch(&pending_res).await {
-                Ok(_response) => {
-                    // Mark and remove all entries in a single blocking operation to avoid
-                    // repeated DB opens and visibility issues.
-                    let ids: Vec<String> = pending_res.iter().map(|hb| hb.id.clone()).collect();
-                    let _ = tokio::task::spawn_blocking(move || -> Result<(), SyncError> {
-                        let q = Queue::new().map_err(|e| SyncError::Database(format!("{}", e)))?;
-                        for id in ids {
-                            q.update_sync_status(
-                                &id,
-                                SyncStatus::Synced,
-                                Some("synced".to_string()),
-                            )
-                            .map_err(|e| SyncError::Database(format!("{}", e)))?;
-                            q.remove(&id)
-                                .map_err(|e| SyncError::Database(format!("{}", e)))?;
-                        }
-                        Ok(())
-                    })
+                Ok(outcome) => {
+                    // A bulk request can answer 2xx while dropping individual
+                    // heartbeats, so only the ones the server named as accepted
+                    // may leave the queue.
+                    let batch = pending_res.clone();
+                    let max_attempts = self.retry_strategy.max_attempts;
+                    let applied = tokio::task::spawn_blocking(
+                        move || -> Result<OutcomeApplied, SyncError> {
+                            let q =
+                                Queue::new().map_err(|e| SyncError::Database(format!("{}", e)))?;
+                            apply_batch_outcome(&q, &batch, &outcome, max_attempts)
+                        },
+                    )
                     .await
                     .map_err(|e| SyncError::Unknown(format!("Join error: {}", e)))??;
 
-                    sync_result.synced_count += pending_res.len();
+                    sync_result.synced_count += applied.accepted;
+                    sync_result.failed_count += applied.failed;
                 }
                 Err(api_err) => {
                     // Map ApiError to SyncError for metrics/logging
-                    let mapped = match api_err {
-                        crate::api::ApiError::Auth(msg) => SyncError::Auth(msg.to_string()),
-                        crate::api::ApiError::RateLimit(msg) => {
-                            SyncError::RateLimit(msg.to_string())
-                        }
-                        crate::api::ApiError::Network(err) => {
-                            SyncError::Network(format!("{}", err))
-                        }
-                        crate::api::ApiError::Api(a, b) => {
-                            SyncError::Network(format!("{}: {}", a, b))
-                        }
-                    };
+                    let mapped = SyncError::from(api_err);
 
                     tracing::warn!(
                         "Batch sync failed with error: {}. Processing per-heartbeat retry logic.",
@@ -865,30 +943,24 @@ impl SyncManager for ChronovaSyncManager {
         result.total_count = pending.len();
 
         match self.api_client.send_heartbeats_batch(&pending).await {
-            Ok(_) => {
-                // Mark and remove all entries in a single blocking operation
-                let ids: Vec<String> = pending.iter().map(|hb| hb.id.clone()).collect();
-                let _ = tokio::task::spawn_blocking(move || -> Result<(), SyncError> {
-                    let q = Queue::new().map_err(|e| SyncError::Database(format!("{}", e)))?;
-                    for id in ids {
-                        q.update_sync_status(&id, SyncStatus::Synced, Some("synced".to_string()))
-                            .map_err(|e| SyncError::Database(format!("{}", e)))?;
-                        q.remove(&id)
-                            .map_err(|e| SyncError::Database(format!("{}", e)))?;
-                    }
-                    Ok(())
-                })
-                .await
-                .map_err(|e| SyncError::Unknown(format!("Join error: {}", e)))??;
-                result.synced_count = pending.len();
+            Ok(outcome) => {
+                // Only the heartbeats the server named as accepted may leave
+                // the queue; the rest stay for another attempt.
+                let batch = pending.clone();
+                let max_attempts = self.retry_strategy.max_attempts;
+                let applied =
+                    tokio::task::spawn_blocking(move || -> Result<OutcomeApplied, SyncError> {
+                        let q = Queue::new().map_err(|e| SyncError::Database(format!("{}", e)))?;
+                        apply_batch_outcome(&q, &batch, &outcome, max_attempts)
+                    })
+                    .await
+                    .map_err(|e| SyncError::Unknown(format!("Join error: {}", e)))??;
+
+                result.synced_count = applied.accepted;
+                result.failed_count = applied.failed;
             }
             Err(api_err) => {
-                let mapped = match api_err {
-                    crate::api::ApiError::Auth(msg) => SyncError::Auth(msg.to_string()),
-                    crate::api::ApiError::RateLimit(msg) => SyncError::RateLimit(msg.to_string()),
-                    crate::api::ApiError::Network(err) => SyncError::Network(format!("{}", err)),
-                    crate::api::ApiError::Api(a, b) => SyncError::Network(format!("{}: {}", a, b)),
-                };
+                let mapped = SyncError::from(api_err);
 
                 // Consolidate retry updates into one blocking operation
                 let ids: Vec<String> = pending.iter().map(|hb| hb.id.clone()).collect();
@@ -1448,5 +1520,142 @@ mod tests {
 
         // Verify the configuration is properly set
         assert_eq!(sync_manager.config.sync_interval_seconds, 60);
+    }
+
+    #[test]
+    fn test_api_error_maps_onto_sync_error() {
+        assert!(matches!(
+            SyncError::from(ApiError::RateLimit {
+                message: "slow down".to_string(),
+                retry_after: Some(Duration::from_secs(5)),
+            }),
+            SyncError::RateLimit(_)
+        ));
+        assert!(matches!(
+            SyncError::from(ApiError::Auth("nope".to_string())),
+            SyncError::Auth(_)
+        ));
+        assert!(matches!(
+            SyncError::from(ApiError::ClientBuild("bad proxy".to_string())),
+            SyncError::Config(_)
+        ));
+        assert!(matches!(
+            SyncError::from(ApiError::ServerError {
+                status: 503,
+                body: String::new(),
+            }),
+            SyncError::Network(_)
+        ));
+
+        // A rate limit has to stay retryable for the backoff to fire.
+        assert!(RetryStrategy::is_retryable_error(&SyncError::RateLimit(
+            "slow down".to_string()
+        )));
+    }
+
+    fn queued_heartbeat(id: &str) -> Heartbeat {
+        Heartbeat {
+            id: id.to_string(),
+            entity: format!("/src/{}.rs", id),
+            entity_type: "file".to_string(),
+            time: 1_700_000_000.0,
+            project: Some("chronova-cli".to_string()),
+            branch: None,
+            language: Some("Rust".to_string()),
+            is_write: false,
+            lines: None,
+            lineno: None,
+            cursorpos: None,
+            user_agent: Some("test/1.0".to_string()),
+            category: Some("coding".to_string()),
+            machine: Some("test-machine".to_string()),
+            editor: None,
+            operating_system: None,
+            commit_hash: None,
+            commit_author: None,
+            commit_message: None,
+            repository_url: None,
+            dependencies: Vec::new(),
+            ai: Default::default(),
+        }
+    }
+
+    /// Set up an isolated queue holding `ids`, all pending.
+    fn queue_with(ids: &[&str]) -> (crate::queue::Queue, tempfile::TempDir) {
+        let temp_dir = tempfile::tempdir().expect("temp dir");
+        let queue =
+            crate::queue::Queue::with_path(temp_dir.path().join("queue.db")).expect("queue opens");
+        for id in ids {
+            queue.add(queued_heartbeat(id)).expect("heartbeat queued");
+        }
+        (queue, temp_dir)
+    }
+
+    fn queued_ids(queue: &crate::queue::Queue, status: SyncStatus) -> Vec<String> {
+        queue
+            .get_pending(None, Some(status))
+            .expect("queue readable")
+            .into_iter()
+            .map(|hb| hb.id)
+            .collect()
+    }
+
+    #[test]
+    fn test_rejected_entry_stays_queued_for_a_retry() {
+        let (queue, _temp_dir) = queue_with(&["hb-1", "hb-2", "hb-3"]);
+        let batch: Vec<Heartbeat> = ["hb-1", "hb-2", "hb-3"]
+            .iter()
+            .map(|id| queued_heartbeat(id))
+            .collect();
+
+        let outcome = BatchSendOutcome::parse(
+            r#"{"responses": [[{}, 202], [{}, 400], [{}, 202]]}"#,
+            batch.len(),
+        );
+        let applied = apply_batch_outcome(&queue, &batch, &outcome, 3).expect("outcome applied");
+
+        assert_eq!(applied.accepted, 2);
+        assert_eq!(applied.failed, 1);
+        assert_eq!(applied.permanent, 0);
+        assert_eq!(queued_ids(&queue, SyncStatus::Failed), vec!["hb-2"]);
+        assert_eq!(queue.get_retry_count("hb-2").unwrap(), 1);
+    }
+
+    #[test]
+    fn test_unmatched_entry_stays_queued_for_a_retry() {
+        // The server described only two of the three heartbeats that were sent.
+        let (queue, _temp_dir) = queue_with(&["hb-1", "hb-2", "hb-3"]);
+        let batch: Vec<Heartbeat> = ["hb-1", "hb-2", "hb-3"]
+            .iter()
+            .map(|id| queued_heartbeat(id))
+            .collect();
+
+        let outcome =
+            BatchSendOutcome::parse(r#"{"responses": [[{}, 202], [{}, 202]]}"#, batch.len());
+        let applied = apply_batch_outcome(&queue, &batch, &outcome, 3).expect("outcome applied");
+
+        assert_eq!(applied.accepted, 2);
+        assert_eq!(applied.failed, 1);
+        assert_eq!(queued_ids(&queue, SyncStatus::Failed), vec!["hb-3"]);
+    }
+
+    #[test]
+    fn test_outcome_gives_up_after_the_last_attempt() {
+        let (queue, _temp_dir) = queue_with(&["hb-1"]);
+        let batch = vec![queued_heartbeat("hb-1")];
+        let outcome = BatchSendOutcome::parse(r#"{"responses": [[{}, 400]]}"#, 1);
+
+        for _ in 0..2 {
+            let applied =
+                apply_batch_outcome(&queue, &batch, &outcome, 3).expect("outcome applied");
+            assert_eq!(applied.permanent, 0);
+        }
+
+        let applied = apply_batch_outcome(&queue, &batch, &outcome, 3).expect("outcome applied");
+        assert_eq!(applied.permanent, 1);
+        assert_eq!(
+            queued_ids(&queue, SyncStatus::PermanentFailure),
+            vec!["hb-1"]
+        );
     }
 }

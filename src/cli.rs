@@ -55,8 +55,8 @@ pub struct Cli {
     pub config: String,
 
     /// Number of seconds to wait when sending heartbeats to api. Defaults to 30 seconds.
-    #[arg(long, default_value = "30")]
-    pub timeout: u64,
+    #[arg(long)]
+    pub timeout: Option<u64>,
 
     /// Turns on debug messages in log file, and sends diagnostics if a crash occurs.
     #[arg(long)]

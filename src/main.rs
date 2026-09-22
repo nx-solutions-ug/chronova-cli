@@ -42,10 +42,11 @@ async fn main() -> Result<()> {
         };
 
         // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        config.apply_transport_overrides(&cli);
 
         // Fetch and display today's activity
         if let Err(e) = fetch_today_activity(&config, &cli).await {
@@ -87,13 +88,13 @@ async fn main() -> Result<()> {
         };
 
         // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        config.apply_transport_overrides(&cli);
 
         // Initialize heartbeat manager
-        let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
@@ -113,7 +114,10 @@ async fn main() -> Result<()> {
         if cli.hide_repository_url {
             config.hide_repository_url = true;
         }
-        let heartbeat_manager = HeartbeatManager::new(config);
+        let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+            eprintln!("Failed to initialize heartbeat manager: {}", e);
+            process::exit(1);
+        });
 
         // Get queue statistics
         match heartbeat_manager.get_queue_stats() {
@@ -226,13 +230,13 @@ async fn main() -> Result<()> {
         };
 
         // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        config.apply_transport_overrides(&cli);
 
         // Initialize heartbeat manager
-        let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
@@ -252,7 +256,10 @@ async fn main() -> Result<()> {
         if cli.hide_repository_url {
             config.hide_repository_url = true;
         }
-        let heartbeat_manager = HeartbeatManager::new(config);
+        let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+            eprintln!("Failed to initialize heartbeat manager: {}", e);
+            process::exit(1);
+        });
 
         // Read extra heartbeats from STDIN as JSON array
         if let Err(e) = process_extra_heartbeats(heartbeat_manager).await {
@@ -273,10 +280,11 @@ async fn main() -> Result<()> {
                 process::exit(1);
             });
 
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        config.apply_transport_overrides(&cli);
 
         match chronova_cli::ai_sync::sync_ai_activity(&cli, config).await {
             Ok(count) => {
@@ -321,10 +329,11 @@ async fn main() -> Result<()> {
     };
 
     // Load configuration
-    let config = Config::load(&cli.config).unwrap_or_else(|e| {
+    let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
         eprintln!("Failed to load configuration: {}", e);
         process::exit(1);
     });
+    config.apply_transport_overrides(&cli);
 
     // Spawn background auto-update if enabled in config
     if config.auto_update {
@@ -371,13 +380,13 @@ async fn main() -> Result<()> {
         };
 
         // Load configuration
-        let config = Config::load(&cli.config).unwrap_or_else(|e| {
+        let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
             process::exit(1);
         });
+        config.apply_transport_overrides(&cli);
 
         // Initialize heartbeat manager
-        let mut config = config;
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
@@ -397,7 +406,10 @@ async fn main() -> Result<()> {
         if cli.hide_repository_url {
             config.hide_repository_url = true;
         }
-        let heartbeat_manager = HeartbeatManager::new(config);
+        let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+            eprintln!("Failed to initialize heartbeat manager: {}", e);
+            process::exit(1);
+        });
 
         // Perform manual sync
         println!("Syncing offline heartbeats...");
@@ -421,7 +433,6 @@ async fn main() -> Result<()> {
     }
 
     // Initialize heartbeat manager
-    let mut config = config;
     if let Some(api_url) = &cli.api_url {
         config.api_url = Some(api_url.clone());
     }
@@ -441,7 +452,10 @@ async fn main() -> Result<()> {
     if cli.hide_repository_url {
         config.hide_repository_url = true;
     }
-    let heartbeat_manager = HeartbeatManager::new(config);
+    let heartbeat_manager = HeartbeatManager::new(config).unwrap_or_else(|e| {
+        eprintln!("Failed to initialize heartbeat manager: {}", e);
+        process::exit(1);
+    });
 
     // Process the heartbeat
     if let Err(e) = heartbeat_manager.process(cli).await {
@@ -460,7 +474,7 @@ async fn fetch_today_activity(config: &Config, cli: &Cli) -> Result<(), anyhow::
     })?;
 
     let base_url = config.get_api_url();
-    let api_client = ApiClient::new(base_url);
+    let api_client = ApiClient::with_transport(base_url, &config.transport_options())?;
     let auth_client = api_client.with_api_key(api_key.clone());
 
     // Fetch today's statusbar data using the correct endpoint
