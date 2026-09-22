@@ -269,7 +269,7 @@ The plugin (>= 4.1.0) does no transcript parsing of its own. It rate-limits to
 60s and executes the CLI with exactly three arguments — `--sync-ai-activity`,
 `--plugin "claude-code/<ver> claude-code-wakatime/<ver>"` and
 `--project-folder <cwd>` — then **logs any stdout or stderr it receives as an
-error**. A successful run must therefore be byte-silent; `main.rs:267` selects
+error**. A successful run must therefore be byte-silent; `main.rs:264` selects
 file-only logging for this reason. If you add output to that path, every
 session's `~/.wakatime/claude-code.log` fills with false errors.
 
@@ -282,9 +282,14 @@ your own sessions, including this one. Consequences worth knowing:
 - Project attribution comes from each transcript line's own `cwd`, not from
   `--project-folder`, which is only a fallback. That is what keeps concurrent
   sessions in different repos labelled correctly.
-- The API mints its own heartbeat ids and does not de-duplicate, so re-parsing
-  an already-reported window double-counts it. This is why an unset cutoff
-  starts from a short lookback rather than upstream's fixed 2025-02-24 date.
+- The API mints its own heartbeat ids (`heartbeat.rs:253` generates a
+  client-side UUID that the server discards and replaces with
+  `hb_<ts>_<rand>`), but the route de-duplicates on `(userId, time, entity)`.
+  `ai_sync.rs:836` derives `time` from the transcript's own timestamp, which
+  is stable across re-parses, so re-parsing an already-reported window is
+  idempotent, not double-counted. The short lookback on an unset cutoff isn't
+  a de-duplication workaround — it exists to bound how much history a first
+  run has to walk; the server-side de-dup now makes it belt-and-braces.
 
 Upstream reference when changing the parser: `wakatime-cli`'s
 `pkg/ai/claude.go` and `pkg/ai/ai.go`. Fetch them rather than inferring the

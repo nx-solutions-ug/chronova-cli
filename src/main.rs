@@ -27,19 +27,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -72,19 +71,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -211,19 +209,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -267,11 +264,19 @@ async fn main() -> Result<()> {
     if cli.sync_ai_activity {
         // File-only logging: the calling plugin treats anything this process
         // writes to stdout/stderr as an error, so a successful run stays silent.
-        let _guard = chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            });
+        // --log-to-stdout is deliberately NOT forwarded here (hardcoded
+        // `false`) — this is the one path that must stay byte-silent no
+        // matter what the caller passes; --log-file is still honored.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            true,
+            cli.log_file.as_deref(),
+            false,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         let config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
@@ -305,20 +310,18 @@ async fn main() -> Result<()> {
         .as_ref()
         .is_some_and(|format| format == "json" || format == "raw-json");
 
-    // Setup logging with appropriate output format handling
-    let _guard = if json_output {
-        chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(
-            |e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            },
-        )
-    } else {
-        chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-            eprintln!("Failed to setup logging: {}", e);
-            process::exit(1);
-        })
-    };
+    // Setup logging with appropriate output format handling; --log-file and
+    // --log-to-stdout (cli.rs) are threaded through here.
+    let _guard = chronova_cli::logger::setup_logging_with_options(
+        cli.verbose,
+        json_output,
+        cli.log_file.as_deref(),
+        cli.log_to_stdout,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Failed to setup logging: {}", e);
+        process::exit(1);
+    });
 
     // Load configuration
     let config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -356,19 +359,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let config = Config::load(&cli.config).unwrap_or_else(|e| {

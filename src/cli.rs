@@ -142,11 +142,11 @@ pub struct Cli {
     #[arg(long)]
     pub exclude_unknown_project: bool,
 
-    /// Enable detecting language from file contents.
+    /// Enable detecting language from file contents. [not yet implemented]
     #[arg(long)]
     pub guess_language: bool,
 
-    /// Optional absolute path to local file for the heartbeat.
+    /// Optional absolute path to local file for the heartbeat. [not yet implemented]
     #[arg(long)]
     pub local_file: Option<String>,
 
@@ -174,11 +174,11 @@ pub struct Cli {
     #[arg(long)]
     pub proxy: Option<String>,
 
-    /// When --verbose or debug enabled, also sends diagnostics on any error not just crashes.
+    /// When --verbose or debug enabled, also sends diagnostics on any error not just crashes. [not yet implemented]
     #[arg(long)]
     pub send_diagnostics_on_errors: bool,
 
-    /// When set, collects metrics usage in '~/.wakatime/metrics' folder. Defaults to false.
+    /// When set, collects metrics usage in '~/.wakatime/metrics' folder. Defaults to false. [not yet implemented]
     #[arg(long)]
     pub metrics: bool,
 
@@ -198,7 +198,7 @@ pub struct Cli {
     #[arg(long)]
     pub extra_heartbeats: bool,
 
-    /// Prints the top developer within a team for the given entity, then exits.
+    /// Prints the top developer within a team for the given entity, then exits. [not yet implemented]
     #[arg(long)]
     pub file_experts: bool,
 
@@ -214,7 +214,7 @@ pub struct Cli {
     #[arg(long, num_args = 2)]
     pub config_write: Option<Vec<String>>,
 
-    /// Optional internal config file. Defaults to '~/.wakatime/wakatime-internal.cfg'.
+    /// Optional internal config file. Defaults to '~/.wakatime/wakatime-internal.cfg'. [not yet implemented]
     #[arg(long)]
     pub internal_config: Option<String>,
 
@@ -222,7 +222,7 @@ pub struct Cli {
     #[arg(long)]
     pub log_to_stdout: bool,
 
-    /// Prints offline heartbeats to stdout.
+    /// Prints offline heartbeats to stdout. [not yet implemented]
     #[arg(long)]
     pub print_offline_heartbeats: Option<i32>,
 
@@ -242,27 +242,27 @@ pub struct Cli {
     #[arg(long)]
     pub user_agent: bool,
 
-    /// (internal) Specify an offline queue file, which will be used instead of the default one.
+    /// (internal) Specify an offline queue file, which will be used instead of the default one. [not yet implemented]
     #[arg(long)]
     pub offline_queue_file: Option<String>,
 
-    /// (internal) Specify the legacy offline queue file, which will be used instead of the default one.
+    /// (internal) Specify the legacy offline queue file, which will be used instead of the default one. [not yet implemented]
     #[arg(long)]
     pub offline_queue_file_legacy: Option<String>,
 
-    /// Normally files that don't exist on disk are skipped and not tracked. When this option is present, the main heartbeat file will be tracked even if it doesn't exist.
+    /// Normally files that don't exist on disk are skipped and not tracked. When this option is present, the main heartbeat file will be tracked even if it doesn't exist. [not yet implemented]
     #[arg(long)]
     pub is_unsaved_entity: bool,
 
-    /// Optional number of lines added or removed by humans since last heartbeat in the current file.
+    /// Optional number of lines added or removed by humans since last heartbeat in the current file. [not yet implemented]
     #[arg(long, allow_hyphen_values = true)]
     pub human_line_changes: Option<i32>,
 
-    /// Optional number of lines added or removed by AI since last heartbeat in the current file.
+    /// Optional number of lines added or removed by AI since last heartbeat in the current file. [not yet implemented]
     #[arg(long, allow_hyphen_values = true)]
     pub ai_line_changes: Option<i32>,
 
-    /// Disables tracking folders unless they contain a .wakatime-project file. Defaults to false.
+    /// Disables tracking folders unless they contain a .wakatime-project file. Defaults to false. [not yet implemented]
     #[arg(long)]
     pub include_only_with_project_file: bool,
 

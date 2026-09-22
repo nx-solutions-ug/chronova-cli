@@ -18,7 +18,22 @@ pub fn setup_logging_with_output_format(
     verbose: bool,
     json_output: bool,
 ) -> Result<WorkerGuard, io::Error> {
-    let log_file = get_log_file_path()?;
+    setup_logging_with_options(verbose, json_output, None, false)
+}
+
+/// `json_output` suppresses the stdout layer so parsed output (e.g. `--output
+/// json`) stays clean; `log_to_stdout` (`--log-to-stdout`) adds it back even
+/// then. Callers that must stay byte-silent no matter what (`--sync-ai-activity`
+/// at `main.rs`) pass `log_to_stdout = false` themselves rather than forwarding
+/// the CLI flag. `log_file` overrides the default `~/.chronova.log` destination
+/// (`--log-file`).
+pub fn setup_logging_with_options(
+    verbose: bool,
+    json_output: bool,
+    log_file: Option<&str>,
+    log_to_stdout: bool,
+) -> Result<WorkerGuard, io::Error> {
+    let log_file = resolve_log_file_path(log_file)?;
 
     // Create log file directory if it doesn't exist
     if let Some(parent) = log_file.parent() {
@@ -46,21 +61,11 @@ pub fn setup_logging_with_output_format(
         .with_timer(ChronoLocalTimer)
         .with_filter(env_filter.clone());
 
-    // Handle JSON output mode - completely disable stdout logging
-    if json_output {
-        // When JSON output is requested, we must ensure stdout is completely clean
-        // Only set up file logging and avoid any stdout contamination
+    if json_output && !log_to_stdout {
+        // Only set up file logging and avoid any stdout contamination.
         let registry = tracing_subscriber::registry().with(file_layer);
-
-        // Set the global default subscriber
-        if tracing::subscriber::set_global_default(registry).is_err() {
-            // If we can't set the global default, a subscriber is already set
-            // We need to ensure it doesn't log to stdout for JSON output
-            // For now, we rely on the fact that no stdout layer was added
-        }
-        // No logging messages should be output to stdout in JSON mode
+        let _ = tracing::subscriber::set_global_default(registry);
     } else {
-        // Normal mode - include both file and stdout logging
         let stdout_layer = fmt::layer()
             .with_writer(io::stdout)
             .with_ansi(true)
@@ -71,16 +76,17 @@ pub fn setup_logging_with_output_format(
             .with(file_layer)
             .with(stdout_layer);
 
-        // Check if a subscriber is already set to avoid "SetGlobalDefaultError"
-        if tracing::subscriber::set_global_default(registry).is_err() {
-            // If we can't set the global default, it means one is already set
-            // Don't log initialization messages to stdout to keep output clean
-        } else {
-            // Don't log initialization messages to stdout to keep output clean
-        }
+        let _ = tracing::subscriber::set_global_default(registry);
     }
 
     Ok(guard)
+}
+
+fn resolve_log_file_path(log_file: Option<&str>) -> Result<PathBuf, io::Error> {
+    match log_file {
+        Some(path) => Ok(PathBuf::from(path)),
+        None => get_log_file_path(),
+    }
 }
 
 fn get_log_file_path() -> Result<PathBuf, io::Error> {
@@ -107,6 +113,18 @@ mod tests {
     #[test]
     fn test_log_file_path() {
         let path = get_log_file_path().unwrap();
+        assert!(path.to_string_lossy().ends_with(".chronova.log"));
+    }
+
+    #[test]
+    fn resolve_log_file_path_honors_override() {
+        let path = resolve_log_file_path(Some("/tmp/custom-chronova.log")).unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/custom-chronova.log"));
+    }
+
+    #[test]
+    fn resolve_log_file_path_defaults_to_chronova_log() {
+        let path = resolve_log_file_path(None).unwrap();
         assert!(path.to_string_lossy().ends_with(".chronova.log"));
     }
 

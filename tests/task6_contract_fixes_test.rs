@@ -1,0 +1,202 @@
+// Integration tests for Task 6 (contract-gap-fixes): --log-file, --log-to-stdout,
+// --disable-offline (6a/6b) and the [not yet implemented] --help markers (6d).
+use assert_cmd::Command;
+use chronova_cli::queue::{Queue, QueueOps};
+use predicates::prelude::*;
+
+// An address that refuses connections immediately, matching the convention
+// already used in src/api.rs's own unit tests for forcing a network error.
+const UNROUTABLE_API_URL: &str = "http://127.0.0.1:9";
+
+#[test]
+fn log_file_flag_writes_to_the_given_path_not_the_default() {
+    let home = tempfile::tempdir().unwrap();
+    let log_path = home.path().join("custom").join("chronova.log");
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--offline-count")
+        .arg("--log-file")
+        .arg(&log_path)
+        .assert()
+        .success();
+
+    assert!(
+        log_path.exists(),
+        "expected a log file at the --log-file path"
+    );
+    assert!(
+        !home.path().join(".chronova.log").exists(),
+        "the default ~/.chronova.log must not be written when --log-file overrides it"
+    );
+}
+
+#[test]
+fn disable_offline_drops_the_heartbeat_after_a_failed_send() {
+    let home = tempfile::tempdir().unwrap();
+    let entity = home.path().join("main.rs");
+    std::fs::write(&entity, "// test\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--entity")
+        .arg(&entity)
+        .arg("--disable-offline")
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .assert()
+        .success();
+
+    let queue = Queue::with_path(home.path().join(".chronova").join("queue.db"))
+        .expect("failed to open the queue db the run created");
+    let stats = queue.get_sync_stats().expect("failed to read queue stats");
+    assert_eq!(
+        stats.total, 0,
+        "--disable-offline must drop the heartbeat instead of queueing it on a failed send"
+    );
+}
+
+#[test]
+fn without_disable_offline_a_failed_send_stays_queued() {
+    // Contrast case for the test above: proves the assertion has teeth by
+    // showing the queue is NOT empty when --disable-offline is absent.
+    let home = tempfile::tempdir().unwrap();
+    let entity = home.path().join("main.rs");
+    std::fs::write(&entity, "// test\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--entity")
+        .arg(&entity)
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .assert()
+        .success();
+
+    let queue = Queue::with_path(home.path().join(".chronova").join("queue.db"))
+        .expect("failed to open the queue db the run created");
+    let stats = queue.get_sync_stats().expect("failed to read queue stats");
+    assert_eq!(
+        stats.total, 1,
+        "without --disable-offline the heartbeat should remain queued after a failed send"
+    );
+}
+
+#[test]
+fn sync_ai_activity_stays_byte_silent_on_success_even_with_log_to_stdout() {
+    // The invoking plugin logs any stdout/stderr this process produces as an
+    // error (AGENTS.md, "Claude Code activity tracking"), so this path must
+    // stay silent no matter what --log-to-stdout asks for.
+    let home = tempfile::tempdir().unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    let assert = cmd
+        .env("HOME", home.path())
+        .arg("--sync-ai-activity")
+        .arg("--plugin")
+        .arg("claude-code/1.0.0 claude-code-wakatime/4.1.0")
+        .arg("--project-folder")
+        .arg(home.path())
+        .arg("--log-to-stdout")
+        .assert()
+        .success();
+
+    let output = assert.get_output();
+    assert!(
+        output.stdout.is_empty(),
+        "stdout must stay empty, got: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert!(
+        output.stderr.is_empty(),
+        "stderr must stay empty, got: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Prove logging still happened (to the file), rather than having been
+    // silently disabled altogether.
+    let log_contents =
+        std::fs::read_to_string(home.path().join(".chronova.log")).expect("log file must exist");
+    assert!(
+        log_contents.contains("ai activity sync produced"),
+        "expected the ai sync summary line in the log file, got: {log_contents}"
+    );
+}
+
+#[test]
+fn log_to_stdout_overrides_the_json_output_forced_file_only_mode() {
+    // The brief names exactly one exception to "--log-to-stdout adds the
+    // stdout layer": --sync-ai-activity (covered above). --output json is
+    // not that exception, so passing --log-to-stdout alongside it does add
+    // the stdout layer, contamination included — that's on the caller.
+    let home = tempfile::tempdir().unwrap();
+    let entity = home.path().join("main.rs");
+    std::fs::write(&entity, "// test\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--entity")
+        .arg(&entity)
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .arg("--output")
+        .arg("json")
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let home2 = tempfile::tempdir().unwrap();
+    let entity2 = home2.path().join("main.rs");
+    std::fs::write(&entity2, "// test\n").unwrap();
+
+    let mut cmd2 = Command::cargo_bin("chronova-cli").unwrap();
+    cmd2.env("HOME", home2.path())
+        .arg("--entity")
+        .arg(&entity2)
+        .arg("--api-url")
+        .arg(UNROUTABLE_API_URL)
+        .arg("--output")
+        .arg("json")
+        .arg("--log-to-stdout")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Heartbeat added to queue"));
+}
+
+#[test]
+fn help_marks_exactly_the_thirteen_unimplemented_flags() {
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    let assert = cmd.arg("--help").assert().success();
+    let output = assert.get_output();
+    let help_text = String::from_utf8_lossy(&output.stdout);
+
+    let count = help_text.matches("[not yet implemented]").count();
+    assert_eq!(
+        count, 13,
+        "expected exactly the 13 flags from the brief to be marked, found {count}"
+    );
+
+    // Flags owned by sibling tasks (4 and 5) must not be marked here.
+    for flag in [
+        "--timeout",
+        "--proxy",
+        "--no-ssl-verify",
+        "--ssl-certs-file",
+        "--exclude ",
+        "--include ",
+        "--hide-project-names",
+        "--hide-project-folder",
+        "--exclude-unknown-project",
+        "--hide-file-names",
+        "--hide-branch-names",
+    ] {
+        let flag_line = help_text
+            .lines()
+            .find(|line| line.trim_start().starts_with(flag))
+            .unwrap_or_else(|| panic!("--help output should still list {flag}"));
+        assert!(
+            !flag_line.contains("[not yet implemented]"),
+            "{flag} is owned by a sibling task and must not be marked here: {flag_line}"
+        );
+    }
+}
