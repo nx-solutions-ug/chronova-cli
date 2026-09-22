@@ -132,14 +132,27 @@ pub struct OutcomeApplied {
     pub failed: usize,
     /// How many of `failed` have now exhausted their retries.
     pub permanent: usize,
+    /// Heartbeats the server refused outright; these were removed unsent.
+    ///
+    /// Deliberately counted as neither accepted nor failed: nothing was
+    /// recorded, but there is nothing left to do about it either.
+    pub discarded: usize,
 }
 
 /// Apply a bulk send's per-heartbeat outcome to the offline queue.
 ///
-/// Accepted heartbeats are marked synced and removed. Rejected and unmatched
-/// ones keep their place in the queue with their retry count incremented, so a
-/// later flush tries them again instead of losing them to a batch that only
-/// looked successful from the outside.
+/// Accepted heartbeats are marked synced and removed. Unmatched ones, and those
+/// rejected with a status the server might answer differently next time, keep
+/// their place in the queue with their retry count incremented, so a later flush
+/// tries them again instead of losing them to a batch that only looked
+/// successful from the outside.
+///
+/// A `400` is the exception: it means the server will never accept this
+/// heartbeat — an entity path it filters by policy, or one it cannot classify —
+/// so it is dropped rather than retried. That mirrors wakatime-cli, whose
+/// `pkg/offline/offline.go` `continue`s past a `400` and re-queues every other
+/// non-2xx, and it is the contract the Chronova server relies on when it reports
+/// truthful per-item statuses.
 pub fn apply_batch_outcome<Q: QueueOps>(
     queue: &Q,
     batch: &[Heartbeat],
@@ -160,6 +173,16 @@ pub fn apply_batch_outcome<Q: QueueOps>(
                 .map_err(to_db)?;
             queue.remove(id).map_err(to_db)?;
             applied.accepted += 1;
+            continue;
+        }
+
+        if matches!(entry, BatchEntryStatus::Rejected(400)) {
+            tracing::debug!(
+                "server refused heartbeat {} outright; dropping it unsent",
+                heartbeat.entity
+            );
+            queue.remove(id).map_err(to_db)?;
+            applied.discarded += 1;
             continue;
         }
 
@@ -1601,7 +1624,11 @@ mod tests {
     }
 
     #[test]
-    fn test_rejected_entry_stays_queued_for_a_retry() {
+    fn test_a_400_is_dropped_rather_than_retried() {
+        // A 400 is the server saying it will never take this heartbeat, so it
+        // leaves the queue unsent and counts as neither synced nor failed —
+        // counting it as failed would send ai_sync back to re-derive a window
+        // the server deliberately discarded.
         let (queue, _temp_dir) = queue_with(&["hb-1", "hb-2", "hb-3"]);
         let batch: Vec<Heartbeat> = ["hb-1", "hb-2", "hb-3"]
             .iter()
@@ -1615,7 +1642,39 @@ mod tests {
         let applied = apply_batch_outcome(&queue, &batch, &outcome, 3).expect("outcome applied");
 
         assert_eq!(applied.accepted, 2);
+        assert_eq!(applied.discarded, 1);
+        assert_eq!(
+            applied.failed, 0,
+            "a deliberate drop is not unfinished business"
+        );
+        assert!(
+            queue
+                .get_pending(None, None)
+                .expect("queue readable")
+                .is_empty(),
+            "nothing is left queued"
+        );
+        assert_eq!(queue.get_retry_count("hb-2").unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn test_a_rejection_the_server_might_reconsider_stays_queued() {
+        // Every non-2xx other than 400 is re-queued, as upstream does.
+        let (queue, _temp_dir) = queue_with(&["hb-1", "hb-2", "hb-3"]);
+        let batch: Vec<Heartbeat> = ["hb-1", "hb-2", "hb-3"]
+            .iter()
+            .map(|id| queued_heartbeat(id))
+            .collect();
+
+        let outcome = BatchSendOutcome::parse(
+            r#"{"responses": [[{}, 202], [{}, 500], [{}, 202]]}"#,
+            batch.len(),
+        );
+        let applied = apply_batch_outcome(&queue, &batch, &outcome, 3).expect("outcome applied");
+
+        assert_eq!(applied.accepted, 2);
         assert_eq!(applied.failed, 1);
+        assert_eq!(applied.discarded, 0);
         assert_eq!(applied.permanent, 0);
         assert_eq!(queued_ids(&queue, SyncStatus::Failed), vec!["hb-2"]);
         assert_eq!(queue.get_retry_count("hb-2").unwrap(), 1);
@@ -1643,7 +1702,7 @@ mod tests {
     fn test_outcome_gives_up_after_the_last_attempt() {
         let (queue, _temp_dir) = queue_with(&["hb-1"]);
         let batch = vec![queued_heartbeat("hb-1")];
-        let outcome = BatchSendOutcome::parse(r#"{"responses": [[{}, 400]]}"#, 1);
+        let outcome = BatchSendOutcome::parse(r#"{"responses": [[{}, 500]]}"#, 1);
 
         for _ in 0..2 {
             let applied =

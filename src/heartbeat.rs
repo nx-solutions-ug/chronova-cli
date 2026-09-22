@@ -15,6 +15,26 @@ use anyhow::Result;
 /// How many times a heartbeat is re-sent before the queue gives up on it.
 const MAX_SYNC_ATTEMPTS: u32 = 3;
 
+/// Why this failure means "stop sending" rather than "try the next one".
+///
+/// A rate limit is the server asking us to back off; a transport failure means
+/// we never reached it. Pushing on would repeat the same failure once per
+/// heartbeat and charge each of them one of its three attempts for a condition
+/// that is not its fault — a single offline invocation would exhaust the queue's
+/// whole retry budget.
+fn defer_reason(error: &crate::api::ApiError) -> Option<String> {
+    match error {
+        crate::api::ApiError::RateLimit { retry_after, .. } => Some(format!(
+            "Rate limited{}",
+            retry_after
+                .map(|d| format!(", retry after {}s", d.as_secs()))
+                .unwrap_or_default()
+        )),
+        crate::api::ApiError::Network(e) => Some(format!("Cannot reach the server ({})", e)),
+        _ => None,
+    }
+}
+
 /// Put heartbeats back on the queue as pending without touching their retry
 /// count: they were either never attempted, or the server asked us to come
 /// back later, and neither is the heartbeat's fault.
@@ -192,8 +212,20 @@ impl HeartbeatManager {
         .await??;
         tracing::debug!("Heartbeat queued for offline-first processing");
 
-        // Process any queued heartbeats using sync strategy
-        let (_synced_count, _failed_count) = self.process_queue().await?;
+        // Process any queued heartbeats using sync strategy.
+        //
+        // The heartbeat is already on disk, so a send that fails here is
+        // deferred, not lost, and this process exits 0. Editor plugins invoke
+        // the CLI once per keystroke batch; reporting a queued heartbeat as a
+        // failed run would have every one of them log an error for data that is
+        // safe. Non-zero exit is reserved for paths that actually drop data —
+        // `--disable-offline`, which never queues in the first place.
+        if let Err(e) = self.process_queue().await {
+            tracing::warn!(
+                "Queued heartbeats could not be sent yet ({}); they stay queued for the next run",
+                e
+            );
+        }
 
         Ok(())
     }
@@ -300,10 +332,16 @@ impl HeartbeatManager {
 
     /// Flush the offline queue, one batch at a time.
     ///
-    /// Returns `(synced, not_synced)`. Anything the server did not accept — a
-    /// rejected entry, an entry it never mentioned, or a batch it asked us to
-    /// stop sending — counts as not synced, *not* only the entries that have
+    /// Returns `(synced, not_synced)`. Anything the server did not accept but
+    /// might yet — an entry it never mentioned, or a batch it asked us to stop
+    /// sending — counts as not synced, *not* only the entries that have
     /// exhausted their retries.
+    ///
+    /// A heartbeat the server refused outright with a `400` counts as neither.
+    /// It is dropped rather than retried, so it is not synced, but it is not
+    /// unfinished business either; counting it as failed would make a window the
+    /// server deliberately discarded look like a total failure and send
+    /// `ai_sync` back to re-derive it forever.
     ///
     /// That distinction is load-bearing. `ai_sync::sync_ai_activity` rolls its
     /// batch back and holds `ai_logs_last_parsed_at` when
@@ -315,37 +353,42 @@ impl HeartbeatManager {
     /// durable store; this number is what decides whether to go back to them.
     async fn process_queue(&self) -> Result<(usize, usize), anyhow::Error> {
         // Process the queue in batches to avoid loading everything into memory at once.
-        // Combine the "prepare retry-eligible failures" pass and the "fetch pending" call
-        // into a single blocking task so the DB is opened only once per loop iteration.
         let batch_size: usize = 50;
 
         // Counters to return to callers
         let mut total_synced: usize = 0;
         let mut total_failed: usize = 0;
 
+        // Give heartbeats that failed in an *earlier* run another turn. This
+        // runs once, before the drain, and deliberately not inside the loop:
+        // promoting mid-drain would feed a heartbeat that just failed straight
+        // back into the next iteration, so one invocation would spend all three
+        // of its attempts on the same unreachable server instead of leaving two
+        // for later runs.
+        tokio::task::spawn_blocking(move || -> Result<(), anyhow::Error> {
+            let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
+            let failed = q
+                .get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed))
+                .map_err(|e| anyhow::anyhow!(e))?;
+            for hb in failed {
+                let current_retry_count = q.get_retry_count(&hb.id).unwrap_or(0);
+                if current_retry_count < MAX_SYNC_ATTEMPTS {
+                    q.update_sync_status(
+                        &hb.id,
+                        crate::sync::SyncStatus::Pending,
+                        Some(format!("Retry eligible (attempt {})", current_retry_count)),
+                    )
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                }
+            }
+            Ok(())
+        })
+        .await??;
+
         loop {
-            // Single blocking operation: prepare retry-eligible failed heartbeats and fetch a batch of pending
             let queued =
                 tokio::task::spawn_blocking(move || -> Result<Vec<Heartbeat>, anyhow::Error> {
                     let q = crate::queue::Queue::new().map_err(|e| anyhow::anyhow!(e))?;
-
-                    // Prepare failed -> pending for retry (single DB connection)
-                    let failed = q
-                        .get_pending(Some(1000), Some(crate::sync::SyncStatus::Failed))
-                        .map_err(|e| anyhow::anyhow!(e))?;
-                    for hb in failed {
-                        let current_retry_count = q.get_retry_count(&hb.id).unwrap_or(0);
-                        if current_retry_count < MAX_SYNC_ATTEMPTS {
-                            q.update_sync_status(
-                                &hb.id,
-                                crate::sync::SyncStatus::Pending,
-                                Some(format!("Retry eligible (attempt {})", current_retry_count)),
-                            )
-                            .map_err(|e| anyhow::anyhow!(e))?;
-                        }
-                    }
-
-                    // Now fetch the next batch of pending heartbeats for processing
                     q.get_pending(Some(batch_size), None)
                         .map_err(|e| anyhow::anyhow!(e))
                 })
@@ -454,22 +497,20 @@ impl HeartbeatManager {
                             return Err(e.into());
                         }
 
-                        if let crate::api::ApiError::RateLimit { retry_after, .. } = &e {
-                            // The server asked us to slow down. Re-sending the
-                            // batch, or falling back to one request per
-                            // heartbeat, is the opposite of backing off: put
-                            // the batch back and let a later flush carry it.
+                        if let Some(reason) = defer_reason(&e) {
+                            // Falling back to one request per heartbeat would
+                            // be the opposite of backing off, and against an
+                            // unreachable server it just repeats the same
+                            // failure fifty more times.
                             tracing::warn!(
-                                "Rate limited on batch sync{}; leaving {} heartbeat(s) queued",
-                                retry_after
-                                    .map(|d| format!(", retry after {}s", d.as_secs()))
-                                    .unwrap_or_default(),
+                                "{} on batch sync; leaving {} heartbeat(s) queued",
+                                reason,
                                 queued.len()
                             );
                             total_failed += queued.len();
                             requeue_pending(
                                 queued.iter().map(|h| h.id.clone()).collect(),
-                                "Rate limited; deferred to the next sync",
+                                &format!("{}; deferred to the next sync", reason),
                             )
                             .await?;
                             break;
@@ -534,35 +575,35 @@ impl HeartbeatManager {
                         total_synced += 1;
                     }
                     Err(e) => {
-                        // Two answers mean "stop sending", not "try the next
-                        // one": the server asked us to slow down, or it refused
-                        // the key under every scheme. Sleeping would stall a CLI
-                        // the editor plugin re-invokes every minute, and pushing
-                        // on would re-run the three-scheme cascade for every
-                        // remaining heartbeat. Neither they nor this one have
-                        // earned a retry, so put them back untouched.
-                        match &e {
-                            crate::api::ApiError::RateLimit { retry_after, .. } => {
-                                tracing::warn!(
-                                    "Rate limited after {} heartbeat(s){}; leaving the rest queued",
-                                    index,
-                                    retry_after
-                                        .map(|d| format!(", retry after {}s", d.as_secs()))
-                                        .unwrap_or_default()
-                                );
-                                deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
-                                break;
-                            }
-                            crate::api::ApiError::Auth(_) => {
-                                tracing::error!(
-                                    "Authentication rejected after {} heartbeat(s) ({}); leaving the rest queued",
-                                    index,
-                                    e
-                                );
-                                deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
-                                break;
-                            }
-                            _ => {}
+                        // Some answers mean "stop sending", not "try the next
+                        // one": the server asked us to slow down, refused the
+                        // key under every scheme, or never answered at all.
+                        // Sleeping would stall a CLI the editor plugin
+                        // re-invokes every minute, and pushing on would repeat
+                        // the same failure for every remaining heartbeat and
+                        // spend an attempt on each. None of them has earned
+                        // that, so they go back untouched.
+                        let stop = if matches!(e, crate::api::ApiError::Auth(_)) {
+                            tracing::error!(
+                                "Authentication rejected after {} heartbeat(s) ({}); leaving the rest queued",
+                                index,
+                                e
+                            );
+                            true
+                        } else if let Some(reason) = defer_reason(&e) {
+                            tracing::warn!(
+                                "{} after {} heartbeat(s); leaving the rest queued",
+                                reason,
+                                index
+                            );
+                            true
+                        } else {
+                            false
+                        };
+
+                        if stop {
+                            deferred_ids.extend(queued[index..].iter().map(|h| h.id.clone()));
+                            break;
                         }
 
                         // Defer retry increment and status updates to a consolidated blocking operation
@@ -638,7 +679,7 @@ impl HeartbeatManager {
 
             if !deferred_ids.is_empty() {
                 total_failed += deferred_ids.len();
-                requeue_pending(deferred_ids, "Server told us to stop sending; deferred").await?;
+                requeue_pending(deferred_ids, "Send deferred to the next sync").await?;
                 break;
             }
         }

@@ -1,7 +1,9 @@
 use chronova_cli::heartbeat::Heartbeat;
 
+#[allow(dead_code)]
 pub const HEARTBEAT_PATH: &str = "/users/current/heartbeats";
 
+#[allow(dead_code)]
 pub fn queued_heartbeat(id: &str) -> Heartbeat {
     Heartbeat {
         id: id.to_string(),
