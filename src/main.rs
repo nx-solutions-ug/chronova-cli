@@ -25,6 +25,12 @@ fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
     if cli.hide_repository_url {
         config.hide_repository_url = true;
     }
+    // `add_heartbeat_to_queue` takes no `Cli`, only `self.config`, so the flag
+    // has to reach it this way -- CLI > config file > default, matching the
+    // git privacy flags above.
+    if cli.disable_offline {
+        config.disable_offline = true;
+    }
 }
 
 #[tokio::main]
@@ -47,19 +53,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -94,19 +99,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -221,19 +225,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -267,11 +270,21 @@ async fn main() -> Result<()> {
     if cli.sync_ai_activity {
         // File-only logging: the calling plugin treats anything this process
         // writes to stdout/stderr as an error, so a successful run stays silent.
-        let _guard = chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            });
+        // json_output = true already makes the logger ignore --log-to-stdout
+        // unconditionally (see setup_logging_with_options' doc comment), but
+        // this call also hardcodes `false` here as belt-and-braces for the
+        // one path that must never emit a byte to stdout; --log-file is still
+        // honored.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            true,
+            cli.log_file.as_deref(),
+            false,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
             eprintln!("Failed to load configuration: {}", e);
@@ -307,20 +320,18 @@ async fn main() -> Result<()> {
         .as_ref()
         .is_some_and(|format| format == "json" || format == "raw-json");
 
-    // Setup logging with appropriate output format handling
-    let _guard = if json_output {
-        chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true).unwrap_or_else(
-            |e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            },
-        )
-    } else {
-        chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-            eprintln!("Failed to setup logging: {}", e);
-            process::exit(1);
-        })
-    };
+    // Setup logging with appropriate output format handling; --log-file and
+    // --log-to-stdout (cli.rs) are threaded through here.
+    let _guard = chronova_cli::logger::setup_logging_with_options(
+        cli.verbose,
+        json_output,
+        cli.log_file.as_deref(),
+        cli.log_to_stdout,
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Failed to setup logging: {}", e);
+        process::exit(1);
+    });
 
     // Load configuration
     let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -359,19 +370,18 @@ async fn main() -> Result<()> {
             .as_ref()
             .is_some_and(|format| format == "json" || format == "raw-json");
 
-        // Setup logging with appropriate output format handling
-        let _guard = if json_output {
-            chronova_cli::logger::setup_logging_with_output_format(cli.verbose, true)
-                .unwrap_or_else(|e| {
-                    eprintln!("Failed to setup logging: {}", e);
-                    process::exit(1);
-                })
-        } else {
-            chronova_cli::logger::setup_logging(cli.verbose).unwrap_or_else(|e| {
-                eprintln!("Failed to setup logging: {}", e);
-                process::exit(1);
-            })
-        };
+        // Setup logging with appropriate output format handling; --log-file and
+        // --log-to-stdout (cli.rs) are threaded through here.
+        let _guard = chronova_cli::logger::setup_logging_with_options(
+            cli.verbose,
+            json_output,
+            cli.log_file.as_deref(),
+            cli.log_to_stdout,
+        )
+        .unwrap_or_else(|e| {
+            eprintln!("Failed to setup logging: {}", e);
+            process::exit(1);
+        });
 
         // Load configuration
         let mut config = Config::load(&cli.config).unwrap_or_else(|e| {
@@ -695,10 +705,17 @@ async fn process_extra_heartbeats(
     heartbeats.extend(primary_heartbeat);
 
     for heartbeat in &heartbeats {
-        heartbeat_manager.add_heartbeat_to_queue(heartbeat.clone())?;
+        heartbeat_manager
+            .add_heartbeat_to_queue(heartbeat.clone())
+            .await?;
     }
 
-    tracing::info!("Successfully queued {} heartbeat(s)", heartbeats.len());
+    // Neutral wording: with --disable-offline these were sent directly rather
+    // than queued, and add_heartbeat_to_queue doesn't expose which happened.
+    tracing::info!(
+        "Successfully processed {} extra heartbeats",
+        heartbeats.len()
+    );
 
     Ok(())
 }

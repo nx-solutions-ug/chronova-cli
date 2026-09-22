@@ -154,6 +154,16 @@ pub struct OsInfo {
     pub version: Option<String>,
 }
 
+/// Priority: `--project` (explicit override) > detected project > `--alternate-project`
+/// (fallback) > `None`.
+fn resolve_project_name(
+    explicit: Option<String>,
+    detected: Option<String>,
+    alternate: Option<String>,
+) -> Option<String> {
+    explicit.or(detected).or(alternate)
+}
+
 impl HeartbeatManager {
     /// Construct a `HeartbeatManager` backed by the real on-disk queue
     /// (`~/.chronova/queue.db`). Delegates to `new_with_queue`, which is the
@@ -235,8 +245,44 @@ impl HeartbeatManager {
             return Ok(());
         }
 
+        // --disable-offline (CLI > config file > default, matching the
+        // disable_git_info/hide_* merge pattern below in main.rs) must be
+        // read before create_heartbeat consumes `cli`.
+        let disable_offline = self.config.disable_offline || cli.disable_offline;
+
         // Create heartbeat from CLI arguments
         let heartbeat = self.create_heartbeat(cli, entity).await?;
+
+        if disable_offline {
+            // --disable-offline: send directly and drop the heartbeat on
+            // failure instead of queueing it. The offline queue (and
+            // HeartbeatManager::new's cleanup_old_entries landmine) is
+            // intentionally not touched for this path.
+            let send_result = if let Some(auth_client) = &self.authenticated_api_client {
+                auth_client.send_heartbeat(&heartbeat).await
+            } else {
+                self.api_client.send_heartbeat(&heartbeat).await
+            };
+            return match send_result {
+                Ok(_) => {
+                    tracing::debug!("Heartbeat sent directly with offline queueing disabled");
+                    Ok(())
+                }
+                Err(e) => {
+                    // A caller must be able to tell "sent" from "silently
+                    // discarded", so this is a hard error (non-zero exit via
+                    // main.rs), not a warn-and-continue.
+                    tracing::warn!(
+                        "Heartbeat send failed with --disable-offline set; dropping instead of queueing: {}",
+                        e
+                    );
+                    Err(anyhow::anyhow!(
+                        "heartbeat send failed with --disable-offline set (dropped instead of queued): {}",
+                        e
+                    ))
+                }
+            };
+        }
 
         // Use offline-first strategy: always queue first, then try to sync
         // Offload SQLite work to a blocking thread to avoid blocking the async runtime.
@@ -287,16 +333,16 @@ impl HeartbeatManager {
         // Parse plugin info for user agent
         // Note: We no longer parse plugin info here as the API handles this
 
-        // Determine project name with priority: cli.project > alternate_project > detected project
-        let project_name = cli.project.or(cli.alternate_project).or_else(|| {
-            project_info.as_ref().map(|p| {
-                p.root
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "unknown".to_string())
-            })
+        // Determine project name with priority: cli.project > detected project > alternate_project
+        let detected_project_name = project_info.as_ref().map(|p| {
+            p.root
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
         });
+        let project_name =
+            resolve_project_name(cli.project, detected_project_name, cli.alternate_project);
 
         // Determine branch with priority: cli.branch > git branch
         let branch = if self.config.disable_git_info || self.config.hide_branch_names {
@@ -842,12 +888,41 @@ impl HeartbeatManagerExt for HeartbeatManager {
 }
 
 impl HeartbeatManager {
-    /// Add a heartbeat directly to the queue for offline processing
-    pub fn add_heartbeat_to_queue(&self, heartbeat: Heartbeat) -> anyhow::Result<()> {
+    /// Add a heartbeat to the queue for offline processing, or — when
+    /// `--disable-offline` is set (`self.config.disable_offline`, merged from
+    /// CLI/config by the caller the same way `process()` does) — send it
+    /// directly and drop it on failure instead of queueing. Used by
+    /// `--extra-heartbeats`, which previously queued unconditionally and
+    /// never read this flag at all.
+    pub async fn add_heartbeat_to_queue(&self, heartbeat: Heartbeat) -> anyhow::Result<()> {
         // Check if entity should be ignored
         if self.should_ignore_entity(&heartbeat.entity) {
             tracing::debug!("Ignoring entity: {}", heartbeat.entity);
             return Ok(());
+        }
+
+        if self.config.disable_offline {
+            let send_result = if let Some(auth_client) = &self.authenticated_api_client {
+                auth_client.send_heartbeat(&heartbeat).await
+            } else {
+                self.api_client.send_heartbeat(&heartbeat).await
+            };
+            return match send_result {
+                Ok(_) => {
+                    tracing::debug!("Heartbeat sent directly with offline queueing disabled");
+                    Ok(())
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Heartbeat send failed with --disable-offline set; dropping instead of queueing: {}",
+                        e
+                    );
+                    Err(anyhow::anyhow!(
+                        "heartbeat send failed with --disable-offline set (dropped instead of queued): {}",
+                        e
+                    ))
+                }
+            };
         }
 
         // Add heartbeat to queue
@@ -1129,6 +1204,78 @@ mod tests {
             !remaining_ids.contains(&beyond_window.id.as_str()),
             "a 40-day-old entry must not survive a configured 30-day retention window"
         );
+    }
+
+    #[test]
+    fn resolve_project_name_prefers_explicit_project() {
+        assert_eq!(
+            resolve_project_name(
+                Some("explicit".to_string()),
+                Some("detected".to_string()),
+                Some("alt".to_string()),
+            ),
+            Some("explicit".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_project_name_detected_beats_alternate_project() {
+        // Regression test for finding 6a: --alternate-project used to
+        // outrank the detected project, contradicting both its own --help
+        // text and upstream wakatime-cli.
+        assert_eq!(
+            resolve_project_name(None, Some("detected".to_string()), Some("alt".to_string())),
+            Some("detected".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_project_name_falls_back_to_alternate_project_when_nothing_detected() {
+        assert_eq!(
+            resolve_project_name(None, None, Some("alt".to_string())),
+            Some("alt".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_project_name_is_none_when_nothing_is_given() {
+        assert_eq!(resolve_project_name(None, None, None), None);
+    }
+
+    #[tokio::test]
+    async fn create_heartbeat_detected_project_beats_alternate_project() {
+        use clap::Parser;
+
+        // A real Cargo.toml marker so detect_project() finds this tempdir
+        // instead of falling through to the directory-name heuristic.
+        let project_dir = tempfile::tempdir().expect("failed to create project tempdir");
+        std::fs::write(project_dir.path().join("Cargo.toml"), "[package]\n")
+            .expect("failed to write project marker");
+        let entity_path = project_dir.path().join("src").join("main.rs");
+
+        let (manager, _temp_dir) = create_test_manager(Config::default());
+
+        let cli = Cli::parse_from([
+            "chronova-cli",
+            "--entity",
+            entity_path.to_str().expect("path must be valid utf-8"),
+            "--alternate-project",
+            "alt-project",
+        ]);
+
+        let heartbeat = manager
+            .create_heartbeat(cli, entity_path.to_string_lossy().to_string())
+            .await
+            .expect("create_heartbeat should succeed");
+
+        let expected_project = project_dir
+            .path()
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string());
+
+        assert_eq!(heartbeat.project, expected_project);
+        assert_ne!(heartbeat.project, Some("alt-project".to_string()));
     }
 
     #[test]

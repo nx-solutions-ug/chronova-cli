@@ -26,12 +26,17 @@ flag dispatch.
 ## State on Disk
 
 Every path derives from `dirs::home_dir()`, so `$HOME` fully isolates a run —
-useful for testing against real data without touching live state.
+useful for testing against real data without touching live state. This holds
+on Unix only: `dirs::home_dir()` ignores `$HOME` on Windows and resolves the
+real user profile instead, so a test relying on `$HOME` isolation must be
+`#[cfg(unix)]`-gated — otherwise it may silently read and write the
+developer's or CI runner's real `~/.chronova/queue.db` and other state
+instead of failing loudly.
 
 | Path | Written by |
 |---|---|
 | `~/.chronova.cfg` | user/config; `--config` overrides (`cli.rs:54`) |
-| `~/.chronova.log` | `logger.rs:90` |
+| `~/.chronova.log` | `logger.rs:108` |
 | `~/.chronova/queue.db` | `queue.rs:716` (WAL mode) |
 | `~/.chronova-internal.cfg` | `ai_sync.rs:277` — `[internal] ai_logs_last_parsed_at` |
 | `~/.chronova/ai-sync.lock` | `ai_sync.rs:271` — advisory lock, released on drop |
@@ -75,6 +80,9 @@ useful for testing against real data without touching live state.
   run it under a throwaway `$HOME` (see State on Disk) and point `api_url` at
   an unroutable address to test the failure path, or at a local mock to test
   the success path. Every config, queue, log and state file follows `$HOME`.
+  This isolation holds on Unix only (see State on Disk); gate such tests
+  `#[cfg(unix)]` — the established pattern in this repo, not a workaround to
+  remove.
 
 ## Common Tasks
 
@@ -85,7 +93,7 @@ useful for testing against real data without touching live state.
 3. Document in help text. The clap doc comment *is* the help text
 
 If the flag must work without `--entity`, handle it **before** the guard at
-`main.rs:295` (`cli.entity.is_none() && cli.sync_offline_activity.is_none()`),
+`main.rs:308` (`cli.entity.is_none() && cli.sync_offline_activity.is_none()`),
 which prints an error and exits. `--sync-ai-activity` sits directly above it
 for that reason.
 
@@ -152,11 +160,11 @@ Two behaviours that are easy to trip over and hard to notice:
   test suite, may still call `cleanup_old_entries(0)` deliberately.
 
 - **`tracing` at INFO goes to stdout, not just the log file.** `setup_logging`
-  adds a stdout layer in normal mode (`logger.rs:63-65`) and the default level
-  is INFO (`logger.rs:36`). For any flag whose caller parses or error-checks
-  output, use `setup_logging_with_output_format(verbose, true)`, which keeps
-  file logging and drops the stdout layer. `--sync-ai-activity` does this
-  because the invoking plugin logs any output as an error.
+  adds a stdout layer in normal mode (`logger.rs:81-85`) and the default level
+  is INFO (`logger.rs:63`). For any flag whose caller parses or error-checks
+  output, use `setup_logging_with_options(verbose, true, cli.log_file.as_deref(),
+  false)`, which keeps file logging and drops the stdout layer. `--sync-ai-activity`
+  does this because the invoking plugin logs any output as an error.
 
 ## Code Style
 
@@ -291,7 +299,7 @@ The plugin (>= 4.1.0) does no transcript parsing of its own. It rate-limits to
 60s and executes the CLI with exactly three arguments — `--sync-ai-activity`,
 `--plugin "claude-code/<ver> claude-code-wakatime/<ver>"` and
 `--project-folder <cwd>` — then **logs any stdout or stderr it receives as an
-error**. A successful run must therefore be byte-silent; `main.rs:267` selects
+error**. A successful run must therefore be byte-silent; `main.rs:278` selects
 file-only logging for this reason. If you add output to that path, every
 session's `~/.wakatime/claude-code.log` fills with false errors.
 
@@ -304,9 +312,15 @@ your own sessions, including this one. Consequences worth knowing:
 - Project attribution comes from each transcript line's own `cwd`, not from
   `--project-folder`, which is only a fallback. That is what keeps concurrent
   sessions in different repos labelled correctly.
-- The API mints its own heartbeat ids and does not de-duplicate, so re-parsing
-  an already-reported window double-counts it. This is why an unset cutoff
-  starts from a short lookback rather than upstream's fixed 2025-02-24 date.
+- The API mints its own heartbeat ids (`heartbeat.rs:263` generates a
+  client-side UUID that the server discards and replaces with
+  `hb_<ts>_<rand>`), but the route de-duplicates on `(userId, time, entity)`.
+  `ai_sync.rs:836` derives `time` from the transcript's own timestamp, which
+  is stable across re-parses, so re-parsing an already-reported window is
+  idempotent, not double-counted. The short lookback was added as a
+  double-count guard (`ai_sync.rs:41-45`); with server-side de-dup it is now
+  belt-and-braces, and its remaining value is bounding how much history a
+  first run walks.
 
 Upstream reference when changing the parser: `wakatime-cli`'s
 `pkg/ai/claude.go` and `pkg/ai/ai.go`. Fetch them rather than inferring the
