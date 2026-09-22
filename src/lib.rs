@@ -9,6 +9,7 @@ pub mod collector;
 pub mod config;
 pub mod heartbeat;
 pub mod logger;
+pub mod privacy;
 pub mod queue;
 pub mod sync;
 pub mod updater;

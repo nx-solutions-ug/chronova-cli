@@ -6,6 +6,7 @@ use chronova_cli::api::ApiClient;
 use chronova_cli::cli::Cli;
 use chronova_cli::config::Config;
 use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
+use chronova_cli::privacy::HideRule;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -112,6 +113,31 @@ async fn main() -> Result<()> {
         }
         if cli.hide_repository_url {
             config.hide_repository_url = true;
+        }
+        // Merge filtering and redaction flags from CLI: a flag the user typed
+        // must win over the config file, and CLI patterns add to the configured
+        // ones rather than replacing them, so a --exclude cannot silently
+        // un-exclude what the config file already hid.
+        if cli.hide_project_folder {
+            config.hide_project_folder = true;
+        }
+        if cli.exclude_unknown_project {
+            config.exclude_unknown_project = true;
+        }
+        if let Some(value) = &cli.hide_file_names {
+            config.hide_file_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_project_names {
+            config.hide_project_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_branch_names {
+            config.hide_branch_names = HideRule::parse(value);
+        }
+        if let Some(patterns) = &cli.exclude {
+            config.ignore_patterns.extend(patterns.iter().cloned());
+        }
+        if let Some(patterns) = &cli.include {
+            config.include_patterns.extend(patterns.iter().cloned());
         }
         let heartbeat_manager = HeartbeatManager::new(config);
 
@@ -251,6 +277,31 @@ async fn main() -> Result<()> {
         }
         if cli.hide_repository_url {
             config.hide_repository_url = true;
+        }
+        // Merge filtering and redaction flags from CLI: a flag the user typed
+        // must win over the config file, and CLI patterns add to the configured
+        // ones rather than replacing them, so a --exclude cannot silently
+        // un-exclude what the config file already hid.
+        if cli.hide_project_folder {
+            config.hide_project_folder = true;
+        }
+        if cli.exclude_unknown_project {
+            config.exclude_unknown_project = true;
+        }
+        if let Some(value) = &cli.hide_file_names {
+            config.hide_file_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_project_names {
+            config.hide_project_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_branch_names {
+            config.hide_branch_names = HideRule::parse(value);
+        }
+        if let Some(patterns) = &cli.exclude {
+            config.ignore_patterns.extend(patterns.iter().cloned());
+        }
+        if let Some(patterns) = &cli.include {
+            config.include_patterns.extend(patterns.iter().cloned());
         }
         let heartbeat_manager = HeartbeatManager::new(config);
 
@@ -397,6 +448,31 @@ async fn main() -> Result<()> {
         if cli.hide_repository_url {
             config.hide_repository_url = true;
         }
+        // Merge filtering and redaction flags from CLI: a flag the user typed
+        // must win over the config file, and CLI patterns add to the configured
+        // ones rather than replacing them, so a --exclude cannot silently
+        // un-exclude what the config file already hid.
+        if cli.hide_project_folder {
+            config.hide_project_folder = true;
+        }
+        if cli.exclude_unknown_project {
+            config.exclude_unknown_project = true;
+        }
+        if let Some(value) = &cli.hide_file_names {
+            config.hide_file_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_project_names {
+            config.hide_project_names = HideRule::parse(value);
+        }
+        if let Some(value) = &cli.hide_branch_names {
+            config.hide_branch_names = HideRule::parse(value);
+        }
+        if let Some(patterns) = &cli.exclude {
+            config.ignore_patterns.extend(patterns.iter().cloned());
+        }
+        if let Some(patterns) = &cli.include {
+            config.include_patterns.extend(patterns.iter().cloned());
+        }
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Perform manual sync
@@ -440,6 +516,31 @@ async fn main() -> Result<()> {
     }
     if cli.hide_repository_url {
         config.hide_repository_url = true;
+    }
+    // Merge filtering and redaction flags from CLI: a flag the user typed
+    // must win over the config file, and CLI patterns add to the configured
+    // ones rather than replacing them, so a --exclude cannot silently
+    // un-exclude what the config file already hid.
+    if cli.hide_project_folder {
+        config.hide_project_folder = true;
+    }
+    if cli.exclude_unknown_project {
+        config.exclude_unknown_project = true;
+    }
+    if let Some(value) = &cli.hide_file_names {
+        config.hide_file_names = HideRule::parse(value);
+    }
+    if let Some(value) = &cli.hide_project_names {
+        config.hide_project_names = HideRule::parse(value);
+    }
+    if let Some(value) = &cli.hide_branch_names {
+        config.hide_branch_names = HideRule::parse(value);
+    }
+    if let Some(patterns) = &cli.exclude {
+        config.ignore_patterns.extend(patterns.iter().cloned());
+    }
+    if let Some(patterns) = &cli.include {
+        config.include_patterns.extend(patterns.iter().cloned());
     }
     let heartbeat_manager = HeartbeatManager::new(config);
 

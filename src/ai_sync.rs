@@ -28,6 +28,7 @@ use crate::cli::Cli;
 use crate::collector::{DataCollector, GitInfo};
 use crate::config::Config;
 use crate::heartbeat::{AiTelemetry, Heartbeat, HeartbeatManager, HeartbeatManagerExt};
+use crate::privacy::Sanitizer;
 use crate::queue::{Queue, QueueOps};
 use crate::user_agent::generate_user_agent;
 
@@ -1284,6 +1285,7 @@ fn app_heartbeat_entity(parser_name: &str, raw_entity: &str) -> String {
 struct BuildContext<'a> {
     collector: &'a DataCollector,
     config: &'a Config,
+    sanitizer: Sanitizer,
     plugin: Option<&'a str>,
     project_folder: Option<&'a str>,
     machine: Option<String>,
@@ -1302,6 +1304,7 @@ impl<'a> BuildContext<'a> {
         Self {
             collector,
             config,
+            sanitizer: Sanitizer::new(config),
             plugin,
             project_folder,
             machine: Some(gethostname::gethostname().to_string_lossy().into_owned()),
@@ -1353,7 +1356,7 @@ impl<'a> BuildContext<'a> {
 
         let hidden = |hide: bool, value: Option<String>| if hide { None } else { value };
         let branch = hidden(
-            self.config.hide_branch_names,
+            self.sanitizer.hides_branch_name(&record.entity),
             git.as_ref().and_then(|g| g.branch.clone()),
         );
         let commit_hash = hidden(
@@ -1619,7 +1622,7 @@ mod tests {
         let file = repo_dir.join("README.md");
 
         let config = Config {
-            hide_branch_names: true,
+            hide_branch_names: crate::privacy::HideRule::Always,
             hide_commit_message: true,
             ..Config::default()
         };

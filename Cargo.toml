@@ -38,6 +38,7 @@ tracing-appender = "0.2"
 base64 = "0.23"
 rand = "0.10"
 async-trait = "0.1"
+regex = "1"
 sysinfo = "0.39.0"
 
 [dev-dependencies]

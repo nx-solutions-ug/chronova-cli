@@ -6,7 +6,7 @@ This is a Rust CLI application that tracks coding activity as a Wakatime-compati
 
 ## Modules
 
-`src/lib.rs` declares 11 modules; `src/main.rs` is the binary and holds only
+`src/lib.rs` declares 12 modules; `src/main.rs` is the binary and holds only
 flag dispatch.
 
 | Module | Role |
@@ -18,6 +18,7 @@ flag dispatch.
 | `api.rs` | `ApiClient`, auth variants, single and batch sends |
 | `sync.rs` | retry/backoff policy, connectivity monitoring, metrics |
 | `collector.rs` | project, git and language detection from a path |
+| `privacy.rs` | `--exclude`/`--include` filtering and the `hide_*` redaction rules |
 | `ai_sync.rs` | `--sync-ai-activity`: Claude Code transcript → heartbeats |
 | `updater.rs` | self-update from GitHub releases |
 | `user_agent.rs` | user-agent string assembly |
