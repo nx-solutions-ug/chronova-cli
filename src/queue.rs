@@ -115,9 +115,12 @@ pub trait QueueOps {
 pub struct Queue {
     conn: Connection,
     /// Retention window `Drop` applies when this queue goes out of scope.
-    /// `None` means "skip the drop-time prune" — the state `set_retention_days`
-    /// stores for a configured `0`, so `Drop` can never itself reach
-    /// `cleanup_old_entries(0)`'s delete-everything special case.
+    /// A bare `Queue` (`new`/`with_path`) defaults to `None` — it never
+    /// prunes on drop. Only `HeartbeatManager::new_with_queue` arms this,
+    /// via `set_retention_days`, with the configured `sync_retention_days`.
+    /// `None` is also what a configured `0` maps to, so `Drop` can never
+    /// itself reach `cleanup_old_entries(0)`'s delete-everything special
+    /// case.
     retention_days: Option<i32>,
 }
 
@@ -500,7 +503,7 @@ impl Queue {
 
         Ok(Self {
             conn,
-            retention_days: Some(7),
+            retention_days: None,
         })
     }
 
@@ -513,22 +516,34 @@ impl Queue {
 
         Ok(Self {
             conn,
-            retention_days: Some(7),
+            retention_days: None,
         })
+    }
+
+    /// The `0`/overflow guard shared by `set_retention_days` and
+    /// `HeartbeatManager::enforce_retention`: `None` for a configured `0` or
+    /// a value too large to represent as `i32`, `Some(valid)` otherwise.
+    /// Centralised so the two call sites can't drift on what "skip
+    /// retention" means — both exist specifically so a configured `0` is
+    /// never confused with `cleanup_old_entries(0)`'s delete-everything
+    /// special case.
+    pub(crate) fn retention_window(days: u32) -> Option<i32> {
+        match i32::try_from(days) {
+            Ok(0) | Err(_) => None,
+            Ok(valid) => Some(valid),
+        }
     }
 
     /// Set the retention window `Drop` applies when this queue is dropped.
     /// `HeartbeatManager::new_with_queue` calls this with the configured
-    /// `sync_retention_days` so `Drop`'s prune matches `enforce_retention`'s
-    /// instead of a hardcoded floor. A `days` of `0`, or one too large to
-    /// represent as `i32`, disables the drop-time prune rather than storing
-    /// a value that would reach `cleanup_old_entries`'s delete-everything
-    /// special case for `0`.
+    /// `sync_retention_days` so `Drop`'s prune matches
+    /// `HeartbeatManager::enforce_retention`'s instead of never running (the
+    /// default) or running at a hardcoded floor (the earlier version of
+    /// this). A configured `0` disables pruning entirely — and since
+    /// nothing in this crate calls `enforce_max_count` in production, `0`
+    /// leaves the queue with no bound at all, not just no age-based one.
     pub fn set_retention_days(&mut self, days: u32) {
-        self.retention_days = match i32::try_from(days) {
-            Ok(0) | Err(_) => None,
-            Ok(valid) => Some(valid),
-        };
+        self.retention_days = Self::retention_window(days);
     }
 
     /// Test-only: back-date a queued heartbeat's `created_at` so retention
@@ -862,7 +877,7 @@ mod tests {
             temp_dir,
             Queue {
                 conn,
-                retention_days: Some(7),
+                retention_days: None,
             },
         ))
     }
@@ -890,7 +905,7 @@ mod tests {
             temp_dir,
             Queue {
                 conn,
-                retention_days: Some(7),
+                retention_days: None,
             },
         ))
     }
@@ -1061,7 +1076,7 @@ mod tests {
             temp_dir,
             Queue {
                 conn,
-                retention_days: Some(7),
+                retention_days: None,
             },
         ))
     }

@@ -179,3 +179,99 @@ fn test_offline_commands_with_verbose_logging() {
         .success()
         .stdout(predicate::str::contains("Offline heartbeats queue status:"));
 }
+
+/// End-to-end proof, through the real binary, that `--sync-offline-activity`
+/// prunes the queue at a *configured* `sync_retention_days` rather than a
+/// hardcoded value — the shape the fix actually runs in production
+/// (`process_queue`'s retention step opens its own transient `Queue::new()`
+/// inside `spawn_blocking`; this is the only test that exercises that exact
+/// path rather than calling the retention function directly). Seeds two
+/// entries, 10 and 40 days old, with `sync_retention_days = 30`: the 40-day
+/// one must be pruned, the 10-day one must survive. The `--api-url` is
+/// unroutable, so the surviving entry ends up `PermanentFailure` rather than
+/// `Pending` after its send attempts are refused — `count()` is used rather
+/// than `get_pending()` (which filters to `Pending` by default) so that
+/// doesn't register as "removed."
+#[cfg(unix)]
+#[test]
+fn test_sync_offline_activity_prunes_at_configured_retention_days() {
+    let home = tempfile::tempdir().unwrap();
+    let chronova_dir = home.path().join(".chronova");
+    fs::create_dir_all(&chronova_dir).unwrap();
+    let db_path = chronova_dir.join("queue.db");
+
+    let queue = Queue::with_path(db_path.clone()).expect("failed to seed test queue");
+    let within_window = Heartbeat {
+        id: "ten-days-old".to_string(),
+        entity: "/tmp/within-window.rs".to_string(),
+        entity_type: "file".to_string(),
+        time: 1.0,
+        project: Some("p".to_string()),
+        branch: None,
+        language: Some("Rust".to_string()),
+        is_write: false,
+        lines: None,
+        lineno: None,
+        cursorpos: None,
+        user_agent: Some("test/1.0".to_string()),
+        category: Some("coding".to_string()),
+        machine: Some("m".to_string()),
+        editor: None,
+        operating_system: None,
+        commit_hash: None,
+        commit_author: None,
+        commit_message: None,
+        repository_url: None,
+        dependencies: Vec::new(),
+        ai: Default::default(),
+    };
+    let beyond_window = Heartbeat {
+        id: "forty-days-old".to_string(),
+        ..within_window.clone()
+    };
+    queue
+        .add(within_window.clone())
+        .expect("failed to seed 10-day-old heartbeat");
+    queue
+        .add(beyond_window.clone())
+        .expect("failed to seed 40-day-old heartbeat");
+    drop(queue);
+
+    // Backdate directly via SQL: `backdate_for_test` is `pub(crate)` and
+    // `#[cfg(test)]` inside the lib crate, not visible to this integration
+    // test binary.
+    let conn = rusqlite::Connection::open(&db_path).expect("failed to open seeded db");
+    conn.execute(
+        "UPDATE heartbeats SET created_at = datetime('now', '-10 days') WHERE id = ?1",
+        rusqlite::params![within_window.id],
+    )
+    .expect("failed to backdate 10-day-old heartbeat");
+    conn.execute(
+        "UPDATE heartbeats SET created_at = datetime('now', '-40 days') WHERE id = ?1",
+        rusqlite::params![beyond_window.id],
+    )
+    .expect("failed to backdate 40-day-old heartbeat");
+    drop(conn);
+
+    let config_content = "\n[settings]\nsync_retention_days = 30\n";
+    let config_file = tempfile::NamedTempFile::new().unwrap();
+    fs::write(&config_file, config_content).unwrap();
+
+    let mut cmd = Command::cargo_bin("chronova-cli").unwrap();
+    cmd.env("HOME", home.path())
+        .arg("--config")
+        .arg(config_file.path())
+        .arg("--api-url")
+        .arg("http://127.0.0.1:1")
+        .arg("--sync-offline-activity")
+        .arg("10")
+        .assert()
+        .success();
+
+    let reopened = Queue::with_path(db_path).expect("failed to reopen seeded db");
+    let count = reopened.count().expect("count should return Ok");
+    assert_eq!(
+        count, 1,
+        "only the entry within the configured 30-day retention window should remain"
+    );
+}
