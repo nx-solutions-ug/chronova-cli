@@ -26,7 +26,12 @@ flag dispatch.
 ## State on Disk
 
 Every path derives from `dirs::home_dir()`, so `$HOME` fully isolates a run —
-useful for testing against real data without touching live state.
+useful for testing against real data without touching live state. This holds
+on Unix only: `dirs::home_dir()` ignores `$HOME` on Windows and resolves the
+real user profile instead, so a test relying on `$HOME` isolation must be
+`#[cfg(unix)]`-gated — otherwise it may silently read and write the
+developer's or CI runner's real `~/.chronova/queue.db` and other state
+instead of failing loudly.
 
 | Path | Written by |
 |---|---|
@@ -75,6 +80,9 @@ useful for testing against real data without touching live state.
   run it under a throwaway `$HOME` (see State on Disk) and point `api_url` at
   an unroutable address to test the failure path, or at a local mock to test
   the success path. Every config, queue, log and state file follows `$HOME`.
+  This isolation holds on Unix only (see State on Disk); gate such tests
+  `#[cfg(unix)]` — the established pattern in this repo, not a workaround to
+  remove.
 
 ## Common Tasks
 
