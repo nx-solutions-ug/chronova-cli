@@ -4,9 +4,19 @@
 //! being fixed was in the wiring between the CLI flags and the config: a unit
 //! test on the sanitizer alone would have passed while the flags still did
 //! nothing.
+//!
+//! Unix only, and the reason is the queue rather than the assertions. Every
+//! run enqueues through `~/.chronova/queue.db`, and `HeartbeatManager::new`
+//! wipes that queue on construction, so two runs sharing one queue destroy
+//! and steal each other's heartbeats. Redirecting `$HOME` gives each test its
+//! own; `dirs::home_dir()` is `known_folder_profile()` on Windows and ignores
+//! the variable (`dirs-7.0.0/src/win.rs:5`), so there the tests would share
+//! the developer's real queue and fail on timing. The rules themselves —
+//! every filter and every redaction — are covered cross-platform by the unit
+//! tests in `privacy.rs`, `heartbeat.rs` and `ai_sync.rs`.
+#![cfg(unix)]
 
 use assert_cmd::Command;
-#[cfg(unix)]
 use chronova_cli::queue::{Queue, QueueOps};
 use std::fs;
 use std::path::Path;
@@ -16,14 +26,6 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// An address that refuses instantly, so a heartbeat stays in the queue
 /// instead of being sent and removed.
-///
-/// Only the queue- and log-reading tests need it, and those are unix-only:
-/// they redirect `$HOME` to isolate that state, which `dirs::home_dir()`
-/// honours on unix but not on Windows, where it reads the profile known
-/// folder. On Windows they would assert against state the binary never wrote
-/// and disturb the developer's real queue instead. The tests that observe the
-/// heartbeat over the wire stay cross-platform.
-#[cfg(unix)]
 const UNREACHABLE_API: &str = "http://127.0.0.1:1/api/v1";
 
 struct Run {
@@ -70,12 +72,10 @@ impl Run {
     /// Counts every row rather than the pending ones: a send to
     /// [`UNREACHABLE_API`] fails, so a heartbeat that was queued is still
     /// there, marked failed.
-    #[cfg(unix)]
     fn log(&self) -> String {
         fs::read_to_string(self.home.path().join(".chronova.log")).unwrap_or_default()
     }
 
-    #[cfg(unix)]
     fn queued_count(&self) -> usize {
         let db = self.home.path().join(".chronova").join("queue.db");
         if !Path::new(&db).exists() {
@@ -166,7 +166,6 @@ async fn hide_branch_names_replaces_the_branch() {
     assert_eq!(heartbeat["branch"].as_str(), Some("HIDDEN"));
 }
 
-#[cfg(unix)]
 #[test]
 fn an_excluded_entity_is_not_queued() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
@@ -179,7 +178,6 @@ fn an_excluded_entity_is_not_queued() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn an_unfiltered_entity_is_queued() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
@@ -192,7 +190,6 @@ fn an_unfiltered_entity_is_queued() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn an_entity_missing_from_the_include_list_is_not_queued() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
@@ -201,7 +198,6 @@ fn an_entity_missing_from_the_include_list_is_not_queued() {
     assert_eq!(run.queued_count(), 0);
 }
 
-#[cfg(unix)]
 #[test]
 fn include_wins_when_both_lists_match() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
@@ -214,7 +210,6 @@ fn include_wins_when_both_lists_match() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn an_invalid_pattern_does_not_abort_the_run() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
@@ -235,7 +230,6 @@ fn an_invalid_pattern_does_not_abort_the_run() {
 }
 
 /// Project markers this codebase looks for when walking an entity's ancestors.
-#[cfg(unix)]
 const PROJECT_MARKERS: [&str; 6] = [
     ".git",
     ".wakatime-project",
@@ -250,7 +244,6 @@ const PROJECT_MARKERS: [&str; 6] = [
 /// The "nothing to strip" case depends on that being true, and a stray
 /// `Cargo.toml` in a shared temp directory would otherwise turn this test into
 /// a confusing failure somewhere else.
-#[cfg(unix)]
 fn assert_no_project_marker_above(path: &Path) {
     let mut current = path.parent();
     while let Some(dir) = current {
@@ -266,7 +259,6 @@ fn assert_no_project_marker_above(path: &Path) {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn hide_project_folder_warns_when_there_is_nothing_to_strip() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "secret.rs");
@@ -377,7 +369,6 @@ async fn hide_project_folder_makes_the_entity_relative() {
 /// `--extra-heartbeats` is the bulk door editor plugins use. It hands over
 /// fully built heartbeats, but their entity is still a real path, so
 /// `--hide-project-folder` has something to strip.
-#[cfg(unix)]
 #[test]
 fn extra_heartbeats_honour_hide_project_folder() {
     let run = Run::new(&format!("api_url = {}", UNREACHABLE_API), "unused.rs");

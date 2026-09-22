@@ -937,6 +937,44 @@ mod tests {
         assert_eq!(prepared.entity, "HIDDEN.rs");
     }
 
+    /// The strip root must be a prefix of the entity *as given*, never a
+    /// resolved form of it.
+    ///
+    /// This one deliberately does not canonicalise: on Windows a `TempDir`
+    /// hands back the 8.3 short form (`C:\Users\RUNNER~1\...`), so if the
+    /// root were ever canonicalised to the long form the two would stop
+    /// matching and the flag would silently emit the full path — a leak, not
+    /// a cosmetic failure. Running this on every platform keeps that honest.
+    #[tokio::test]
+    async fn prepare_heartbeat_strips_an_uncanonicalised_project_folder() {
+        let config = Config {
+            hide_project_folder: true,
+            ..Default::default()
+        };
+        let (manager, _temp_dir) = create_test_manager(config);
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path();
+        std::fs::write(root.join("Cargo.toml"), "[package]").expect("project marker");
+        std::fs::create_dir(root.join("src")).expect("src dir");
+        let entity_path = root.join("src").join("main.rs");
+        std::fs::write(&entity_path, "fn main() {}").expect("write entity");
+        let entity = entity_path.to_string_lossy().into_owned();
+
+        let prepared = manager
+            .prepare_heartbeat(test_cli(&entity), entity)
+            .await
+            .expect("no error")
+            .expect("redaction keeps the heartbeat");
+
+        assert_eq!(
+            prepared.entity,
+            std::path::Path::new("src")
+                .join("main.rs")
+                .to_string_lossy()
+        );
+    }
+
     #[tokio::test]
     async fn prepare_heartbeat_strips_the_project_folder() {
         let config = Config {
