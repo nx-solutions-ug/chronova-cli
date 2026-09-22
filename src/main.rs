@@ -7,6 +7,28 @@ use chronova_cli::cli::Cli;
 use chronova_cli::config::Config;
 use chronova_cli::heartbeat::{HeartbeatManager, HeartbeatManagerExt};
 
+/// Applies CLI overrides to the loaded config. CLI beats file beats defaults.
+fn apply_cli_overrides(config: &mut Config, cli: &Cli) {
+    if let Some(key) = &cli.key {
+        config.api_key = Some(key.clone());
+    }
+    if cli.disable_git_info {
+        config.disable_git_info = true;
+    }
+    if cli.hide_commit_hash {
+        config.hide_commit_hash = true;
+    }
+    if cli.hide_commit_author {
+        config.hide_commit_author = true;
+    }
+    if cli.hide_commit_message {
+        config.hide_commit_message = true;
+    }
+    if cli.hide_repository_url {
+        config.hide_repository_url = true;
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Parse command line arguments
@@ -97,22 +119,7 @@ async fn main() -> Result<()> {
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
-        // Merge git privacy flags from CLI
-        if cli.disable_git_info {
-            config.disable_git_info = true;
-        }
-        if cli.hide_commit_hash {
-            config.hide_commit_hash = true;
-        }
-        if cli.hide_commit_author {
-            config.hide_commit_author = true;
-        }
-        if cli.hide_commit_message {
-            config.hide_commit_message = true;
-        }
-        if cli.hide_repository_url {
-            config.hide_repository_url = true;
-        }
+        apply_cli_overrides(&mut config, &cli);
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Get queue statistics
@@ -236,22 +243,7 @@ async fn main() -> Result<()> {
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
-        // Merge git privacy flags from CLI
-        if cli.disable_git_info {
-            config.disable_git_info = true;
-        }
-        if cli.hide_commit_hash {
-            config.hide_commit_hash = true;
-        }
-        if cli.hide_commit_author {
-            config.hide_commit_author = true;
-        }
-        if cli.hide_commit_message {
-            config.hide_commit_message = true;
-        }
-        if cli.hide_repository_url {
-            config.hide_repository_url = true;
-        }
+        apply_cli_overrides(&mut config, &cli);
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Read extra heartbeats from STDIN as JSON array
@@ -381,22 +373,7 @@ async fn main() -> Result<()> {
         if let Some(api_url) = &cli.api_url {
             config.api_url = Some(api_url.clone());
         }
-        // Merge git privacy flags from CLI
-        if cli.disable_git_info {
-            config.disable_git_info = true;
-        }
-        if cli.hide_commit_hash {
-            config.hide_commit_hash = true;
-        }
-        if cli.hide_commit_author {
-            config.hide_commit_author = true;
-        }
-        if cli.hide_commit_message {
-            config.hide_commit_message = true;
-        }
-        if cli.hide_repository_url {
-            config.hide_repository_url = true;
-        }
+        apply_cli_overrides(&mut config, &cli);
         let heartbeat_manager = HeartbeatManager::new(config);
 
         // Perform manual sync
@@ -425,22 +402,7 @@ async fn main() -> Result<()> {
     if let Some(api_url) = &cli.api_url {
         config.api_url = Some(api_url.clone());
     }
-    // Merge git privacy flags from CLI
-    if cli.disable_git_info {
-        config.disable_git_info = true;
-    }
-    if cli.hide_commit_hash {
-        config.hide_commit_hash = true;
-    }
-    if cli.hide_commit_author {
-        config.hide_commit_author = true;
-    }
-    if cli.hide_commit_message {
-        config.hide_commit_message = true;
-    }
-    if cli.hide_repository_url {
-        config.hide_repository_url = true;
-    }
+    apply_cli_overrides(&mut config, &cli);
     let heartbeat_manager = HeartbeatManager::new(config);
 
     // Process the heartbeat
@@ -707,4 +669,66 @@ async fn process_extra_heartbeats(
     tracing::info!("Successfully queued {} extra heartbeats", heartbeats.len());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod apply_cli_overrides_tests {
+    use super::*;
+
+    #[test]
+    fn cli_key_wins_over_config_file_key() {
+        let cli = Cli::parse_from(["chronova-cli", "--key", "cli_key"]);
+        let mut config = Config {
+            api_key: Some("file_key".to_string()),
+            ..Default::default()
+        };
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.get_api_key(None), Some("cli_key".to_string()));
+    }
+
+    #[test]
+    fn config_file_key_used_when_cli_key_unset() {
+        let cli = Cli::parse_from(["chronova-cli"]);
+        let mut config = Config {
+            api_key: Some("file_key".to_string()),
+            ..Default::default()
+        };
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.get_api_key(None), Some("file_key".to_string()));
+    }
+
+    #[test]
+    fn no_key_when_neither_cli_nor_config_set() {
+        let cli = Cli::parse_from(["chronova-cli"]);
+        let mut config = Config::default();
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert_eq!(config.get_api_key(None), None);
+    }
+
+    #[test]
+    fn all_git_privacy_flags_still_applied() {
+        let cli = Cli::parse_from([
+            "chronova-cli",
+            "--disable-git-info",
+            "--hide-commit-hash",
+            "--hide-commit-author",
+            "--hide-commit-message",
+            "--hide-repository-url",
+        ]);
+        let mut config = Config::default();
+
+        apply_cli_overrides(&mut config, &cli);
+
+        assert!(config.disable_git_info);
+        assert!(config.hide_commit_hash);
+        assert!(config.hide_commit_author);
+        assert!(config.hide_commit_message);
+        assert!(config.hide_repository_url);
+    }
 }
