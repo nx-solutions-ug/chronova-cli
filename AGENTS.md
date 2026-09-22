@@ -282,7 +282,7 @@ your own sessions, including this one. Consequences worth knowing:
 - Project attribution comes from each transcript line's own `cwd`, not from
   `--project-folder`, which is only a fallback. That is what keeps concurrent
   sessions in different repos labelled correctly.
-- The API mints its own heartbeat ids (`heartbeat.rs:253` generates a
+- The API mints its own heartbeat ids (`heartbeat.rs:254` generates a
   client-side UUID that the server discards and replaces with
   `hb_<ts>_<rand>`), but the route de-duplicates on `(userId, time, entity)`.
   `ai_sync.rs:836` derives `time` from the transcript's own timestamp, which

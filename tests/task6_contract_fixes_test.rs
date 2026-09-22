@@ -170,10 +170,53 @@ fn help_marks_exactly_the_thirteen_unimplemented_flags() {
     let output = assert.get_output();
     let help_text = String::from_utf8_lossy(&output.stdout);
 
-    let count = help_text.matches("[not yet implemented]").count();
+    // clap renders each flag as a "--flag <VALUE>" header line followed by an
+    // indented description line, so a flag's own line rarely contains its
+    // description. Group lines into per-flag blocks instead of matching a
+    // single line — otherwise this test would pass regardless of what got
+    // marked, since the marker never lands on the header line.
+    let mut blocks: Vec<(&str, String)> = Vec::new();
+    for line in help_text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(name) = trimmed
+            .strip_prefix("--")
+            .and_then(|_| trimmed.split_whitespace().next())
+        {
+            blocks.push((name, String::new()));
+        } else if let Some((_, desc)) = blocks.last_mut() {
+            desc.push(' ');
+            desc.push_str(trimmed);
+        }
+    }
+
+    let marked: Vec<&str> = blocks
+        .iter()
+        .filter(|(_, desc)| desc.contains("[not yet implemented]"))
+        .map(|(name, _)| *name)
+        .collect();
+
+    let mut expected = [
+        "--local-file",
+        "--metrics",
+        "--is-unsaved-entity",
+        "--human-line-changes",
+        "--ai-line-changes",
+        "--print-offline-heartbeats",
+        "--offline-queue-file",
+        "--offline-queue-file-legacy",
+        "--internal-config",
+        "--include-only-with-project-file",
+        "--send-diagnostics-on-errors",
+        "--guess-language",
+        "--file-experts",
+    ];
+    expected.sort_unstable();
+    let mut marked_sorted = marked.clone();
+    marked_sorted.sort_unstable();
+
     assert_eq!(
-        count, 13,
-        "expected exactly the 13 flags from the brief to be marked, found {count}"
+        marked_sorted, expected,
+        "the set of flags marked [not yet implemented] must be exactly the brief's thirteen"
     );
 
     // Flags owned by sibling tasks (4 and 5) must not be marked here.
@@ -182,21 +225,21 @@ fn help_marks_exactly_the_thirteen_unimplemented_flags() {
         "--proxy",
         "--no-ssl-verify",
         "--ssl-certs-file",
-        "--exclude ",
-        "--include ",
+        "--exclude",
+        "--include",
         "--hide-project-names",
         "--hide-project-folder",
         "--exclude-unknown-project",
         "--hide-file-names",
         "--hide-branch-names",
     ] {
-        let flag_line = help_text
-            .lines()
-            .find(|line| line.trim_start().starts_with(flag))
-            .unwrap_or_else(|| panic!("--help output should still list {flag}"));
         assert!(
-            !flag_line.contains("[not yet implemented]"),
-            "{flag} is owned by a sibling task and must not be marked here: {flag_line}"
+            blocks.iter().any(|(name, _)| *name == flag),
+            "--help output should still list {flag}"
+        );
+        assert!(
+            !marked.contains(&flag),
+            "{flag} is owned by a sibling task and must not be marked here"
         );
     }
 }
