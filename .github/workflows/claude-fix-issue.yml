@@ -67,6 +67,10 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
+          # claude-ci's triage job dispatches this workflow with the app token, so
+          # the actor is chronova-agent[bot] — and the action blocks bot actors by
+          # default, which stops every automated fix before it starts.
+          allowed_bots: "chronova-agent[bot]"
           prompt: "/fix-issue ${{ github.event.client_payload.issue_number || github.event.inputs.issue_number }}"
           claude_args: |
             --model claude-sonnet-5
