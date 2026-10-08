@@ -1817,6 +1817,23 @@ mod tests {
     }
 
     #[test]
+    fn an_app_heartbeat_is_named_after_its_repository_not_a_marker_above_it() {
+        // The transcript's cwd is the repository itself. A package.json in an
+        // ancestor — an `npm init` in $HOME — once relabelled every session
+        // below it with that ancestor's name.
+        let dir = TempDir::new().unwrap();
+        let repo_dir = repo_with_commit(&dir);
+        fs::write(dir.path().join("package.json"), r#"{"name": "stray"}"#).unwrap();
+
+        let hb = build_one(
+            Config::default(),
+            record_at("Claude sess-1", "app", repo_dir.to_str()),
+        );
+
+        assert_eq!(hb.project.as_deref(), Some("repo"));
+    }
+
+    #[test]
     fn an_app_heartbeat_without_a_directory_reports_no_git_information() {
         let hb = build_one(Config::default(), record_at("Claude sess-1", "app", None));
 

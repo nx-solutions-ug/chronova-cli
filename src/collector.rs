@@ -27,6 +27,9 @@
 //! // Detect project from a file path
 //! let project = collector.detect_project("/path/to/file.rs").await;
 //!
+//! // A directory is searched from itself, not from its parent
+//! let project = collector.detect_project("/path/to/repo").await;
+//!
 //! // Detect git information
 //! let git_info = collector.detect_git_info("/path/to/file.rs").await;
 //!
@@ -96,7 +99,10 @@ impl DataCollector {
 
         // 1) Prefer explicit project markers (git, Cargo.toml, package.json, etc.)
         // But respect worktree boundaries - if we're in a worktree, use the main repo path.
-        if let Some(root) = self.find_project_root(path) {
+        if let Some(root) = self
+            .search_start(path)
+            .and_then(|start| self.find_project_root(start))
+        {
             // Check if we're in a worktree and resolve to main repo if so
             let root = self.get_project_root_respecting_worktree(&root);
             let name = self.extract_project_name(&root);
@@ -124,7 +130,7 @@ impl DataCollector {
             "build",
             "tests",
         ];
-        let mut current = path.parent();
+        let mut current = self.search_start(path);
         while let Some(dir) = current {
             // Prefer explicit markers if present on this ancestor
             if dir.join("package.json").exists()
@@ -154,9 +160,9 @@ impl DataCollector {
             current = dir.parent();
         }
 
-        // 4) Fallback to immediate parent
-        if let Some(parent) = path.parent() {
-            let root = parent.to_path_buf();
+        // 4) Fallback to the directory the search started in
+        if let Some(start) = self.search_start(path) {
+            let root = start.to_path_buf();
 
             // If the immediate parent is a common code-folder, try its parent instead
             if let Some(parent_name) = root.file_name().and_then(|n| n.to_str()) {
@@ -326,11 +332,26 @@ impl DataCollector {
     /// prefix of the entity itself, and a worktree's main repository is not
     /// one of its ancestors.
     pub fn containing_project_root(&self, entity_path: &str) -> Option<PathBuf> {
-        self.find_project_root(Path::new(entity_path))
+        self.find_project_root(Path::new(entity_path).parent()?)
     }
 
-    fn find_project_root(&self, path: &Path) -> Option<PathBuf> {
-        let mut current = path.parent()?;
+    /// The directory a search for a project starts in.
+    ///
+    /// A file is looked up from the directory that holds it. A directory —
+    /// the cwd an AI session reports — is itself the first candidate:
+    /// starting at its parent skips the repository's own `.git` and hands the
+    /// project to whatever marker sits further up.
+    fn search_start<'a>(&self, path: &'a Path) -> Option<&'a Path> {
+        if path.is_dir() {
+            Some(path)
+        } else {
+            path.parent()
+        }
+    }
+
+    /// The nearest directory carrying a project marker, from `start` upwards.
+    fn find_project_root(&self, start: &Path) -> Option<PathBuf> {
+        let mut current = start;
 
         while current.parent().is_some() {
             // Check for common project markers
@@ -1062,5 +1083,107 @@ mod tests {
 
         // Cleanup
         worktree.prune(None).ok();
+    }
+
+    /// A repository with one commit at `repo_dir`, created along with its parents.
+    fn init_repo_with_commit(repo_dir: &Path) -> Repository {
+        use git2::Signature;
+
+        fs::create_dir_all(repo_dir).unwrap();
+        let repo = Repository::init(repo_dir).expect("init repo");
+        fs::write(repo_dir.join("README.md"), "hello").unwrap();
+        {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("README.md")).unwrap();
+            let tree_oid = index.write_tree().unwrap();
+            let tree = repo.find_tree(tree_oid).unwrap();
+            let sig = Signature::now("Test Author", "author@example.com").unwrap();
+            repo.commit(Some("HEAD"), &sig, &sig, "initial commit", &tree, &[])
+                .unwrap();
+        }
+        repo
+    }
+
+    #[tokio::test]
+    async fn test_detect_project_directory_is_not_outranked_by_a_marker_above_it() {
+        // An AI session reports the directory it runs in, which is usually the
+        // repository itself. A stray package.json further up — an `npm init`
+        // in $HOME — must not claim every repository below it.
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join("home-dir");
+        let repo_dir = home.join("my-repo");
+        init_repo_with_commit(&repo_dir);
+        fs::write(home.join("package.json"), r#"{"name": "stray"}"#).unwrap();
+
+        let project_info = DataCollector::new()
+            .detect_project(repo_dir.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs::canonicalize(&project_info.root).unwrap(),
+            fs::canonicalize(&repo_dir).unwrap(),
+            "a repository directory is its own project root"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_detect_project_worktree_directory_resolves_main_repo_despite_marker_above() {
+        let temp_dir = TempDir::new().unwrap();
+        let home = temp_dir.path().join("home-dir");
+        let main_repo_path = home.join("main-repo");
+        let main_repo = init_repo_with_commit(&main_repo_path);
+        let worktree_path = home.join("worktrees").join("feature-x");
+        fs::create_dir_all(worktree_path.parent().unwrap()).unwrap();
+        let worktree = main_repo
+            .worktree("feature-x", &worktree_path, None)
+            .unwrap();
+        fs::write(home.join("package.json"), r#"{"name": "stray"}"#).unwrap();
+
+        let project_info = DataCollector::new()
+            .detect_project(worktree_path.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs::canonicalize(&project_info.root).unwrap(),
+            fs::canonicalize(&main_repo_path).unwrap(),
+            "a worktree directory belongs to its main repository"
+        );
+
+        // Cleanup
+        worktree.prune(None).ok();
+    }
+
+    #[tokio::test]
+    async fn test_detect_project_plain_directory_is_named_after_itself() {
+        // No repository and no marker: the directory is the project, not its parent.
+        let temp_dir = TempDir::new().unwrap();
+        let plain_dir = temp_dir.path().join("scratch-notes");
+        fs::create_dir_all(&plain_dir).unwrap();
+
+        let project_info = DataCollector::new()
+            .detect_project(plain_dir.to_str().unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(project_info.name, "scratch-notes");
+        assert_eq!(project_info.root, plain_dir);
+    }
+
+    #[test]
+    fn test_containing_project_root_of_a_directory_is_still_an_ancestor() {
+        // `--hide-project-folder` strips this root off the entity. Were a
+        // directory entity its own root, the entity sent would be empty.
+        let temp_dir = TempDir::new().unwrap();
+        let outer = temp_dir.path().join("outer");
+        let inner = outer.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(outer.join("package.json"), "{}").unwrap();
+        fs::write(inner.join("package.json"), "{}").unwrap();
+
+        let root = DataCollector::new().containing_project_root(inner.to_str().unwrap());
+
+        assert_eq!(root, Some(outer));
     }
 }
