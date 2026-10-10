@@ -89,11 +89,20 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           COMMENT_ID: ${{ github.event.comment.id }}
+        # The Claude GitHub App reacts 👀 to every @claude mention on its own,
+        # seconds before this step runs, so a second 👀 from this app doubled
+        # it up. Only react when nobody has acknowledged the comment yet, which
+        # in practice is the /claude trigger.
         run: |
           if [[ "$EVENT_NAME" == "pull_request_review_comment" ]]; then
-            gh api --method POST "/repos/${GH_REPO}/pulls/comments/${COMMENT_ID}/reactions" -f content='eyes'
+            REACTIONS_URL="/repos/${GH_REPO}/pulls/comments/${COMMENT_ID}/reactions"
           else
-            gh api --method POST "/repos/${GH_REPO}/issues/comments/${COMMENT_ID}/reactions" -f content='eyes'
+            REACTIONS_URL="/repos/${GH_REPO}/issues/comments/${COMMENT_ID}/reactions"
+          fi
+          if [[ -n "$(gh api "${REACTIONS_URL}?content=eyes" --jq '.[0].id // empty')" ]]; then
+            echo "Comment already has an eyes reaction; not adding another."
+          else
+            gh api --method POST "$REACTIONS_URL" -f content='eyes'
           fi
 
       - name: Install gh-pr-review extension
