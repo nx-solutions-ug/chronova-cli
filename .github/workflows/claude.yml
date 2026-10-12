@@ -175,9 +175,10 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
-          # The action sets its own git identity (claude[bot] by default), which
-          # overrides the global config above, so commits would not be attributed
-          # to the app whose token pushes them.
+          # The action sets its own git identity, which overrides the global config
+          # above. Its default email carries user ID 41898282, which GitHub resolves
+          # to github-actions[bot], so commits landed under that account instead of
+          # the app whose token pushes them.
           bot_id: "286787224"
           bot_name: "chronova-agent[bot]"
           prompt: ${{ steps.build-prompt.outputs.prompt }}
