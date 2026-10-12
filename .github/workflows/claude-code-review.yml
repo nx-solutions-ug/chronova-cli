@@ -111,7 +111,9 @@ jobs:
           github_token: ${{ steps.app-token.outputs.token }}
           # This job exists precisely to review bot-authored PRs, and the action
           # blocks bot actors by default — without this it never runs.
-          allowed_bots: "renovate[bot],dependabot[bot]"
+          # chronova-agent[bot] is the actor of the `synchronize` run after an
+          # @claude fix is pushed to a dependency PR.
+          allowed_bots: "renovate[bot],dependabot[bot],chronova-agent[bot]"
           prompt: "/dependency-review ${{ github.event.pull_request.number }}"
           claude_args: |
             --model claude-sonnet-5
