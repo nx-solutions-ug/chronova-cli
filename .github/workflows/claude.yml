@@ -182,8 +182,11 @@ jobs:
           bot_id: "286787224"
           bot_name: "chronova-agent[bot]"
           prompt: ${{ steps.build-prompt.outputs.prompt }}
+          # Model and effort pinned together — see "Run code review" in
+          # claude-code-review.yml for why.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-sonnet-5-5
+            --effort high
             --allowedTools "Bash,Read,Grep,Glob,Edit,Write,WebFetch"
 
       - name: Surface Claude's failure message

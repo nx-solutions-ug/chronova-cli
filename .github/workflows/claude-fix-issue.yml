@@ -78,8 +78,11 @@ jobs:
           # default, which stops every automated fix before it starts.
           allowed_bots: "chronova-agent[bot]"
           prompt: "/fix-issue ${{ github.event.client_payload.issue_number || github.event.inputs.issue_number }}"
+          # Model and effort pinned together — see "Run code review" in
+          # claude-code-review.yml for why.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-sonnet-5-5
+            --effort high
             --allowedTools "Bash,Read,Grep,Glob,Edit,Write,WebFetch"
 
       - name: Surface Claude's failure message

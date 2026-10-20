@@ -115,8 +115,11 @@ jobs:
           # @claude fix is pushed to a dependency PR.
           allowed_bots: "renovate[bot],dependabot[bot],chronova-agent[bot]"
           prompt: "/dependency-review ${{ github.event.pull_request.number }}"
+          # Model and effort pinned together — see "Run code review" in
+          # claude-code-review.yml for why.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-sonnet-5-5
+            --effort high
             --allowedTools "Bash,Read,Grep,Glob,WebFetch,WebSearch"
 
       - name: Surface Claude's failure message
@@ -378,8 +381,16 @@ jobs:
           # never get a review. Replace "*" with explicit logins to tighten.
           allowed_non_write_users: "*"
           prompt: "/review-pr ${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          # Model and effort are both pinned, never left to the CLI's defaults: the
+          # action installs the newest Claude Code on every run, and CLI 2.1.284
+          # (2026-09-29) made claude-sonnet-5-5 the default model. At its default
+          # effort that model reviews shallowly — dy-git/platform#743 measured a
+          # median pass falling from 37 turns to 5 with no findings and every check
+          # green, while `--effort high` caught 3/3 planted defects. Change either
+          # value only together with the other, in every claude-code-action step.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-sonnet-5-5
+            --effort high
             --allowedTools "Bash,Read,Grep,Glob,WebFetch"
 
       - name: Surface Claude's failure message

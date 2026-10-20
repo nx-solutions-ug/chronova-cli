@@ -74,8 +74,11 @@ jobs:
           # of logins to tighten. Note the job holds only `issues: write`.
           allowed_non_write_users: "*"
           prompt: "/triage-issue ${{ github.event.issue.number || github.event.inputs.issue_number }}"
+          # Model and effort pinned together — see "Run code review" in
+          # claude-code-review.yml for why.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-sonnet-5-5
+            --effort high
             --allowedTools "Bash,Read,Grep,Glob,WebFetch"
 
       - name: Surface Claude's failure message
@@ -214,8 +217,11 @@ jobs:
           # actors by default.
           allowed_bots: "renovate[bot],dependabot[bot],chronova-agent[bot]"
           prompt: "/label-pr ${{ github.event.pull_request.number || github.event.inputs.pr_number }}"
+          # Model and effort pinned together — see "Run code review" in
+          # claude-code-review.yml for why.
           claude_args: |
-            --model claude-sonnet-5
+            --model claude-sonnet-5-5
+            --effort high
             --allowedTools "Bash,Read,Grep,Glob"
 
       - name: Surface Claude's failure message
