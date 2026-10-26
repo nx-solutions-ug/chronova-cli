@@ -1,5 +1,21 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "minimumReleaseAge": "3 days",
+  "osvVulnerabilityAlerts": true,
+  "separateMinorPatch": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "minimumReleaseAge": null
+  },
+  "packageRules": [
+    {
+      "description": "Patch updates merge themselves once checks pass; minor and major get a PR for review",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "automerge": true
+    }
+  ],
   "extends": [
     "config:recommended"
   ]
