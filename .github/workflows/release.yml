@@ -158,6 +158,8 @@ jobs:
       - name: Build (cross)
         if: matrix.cross
         run: cross build --release --target ${{ matrix.target }}
+        env:
+          CROSS_REMOTE: ${{ runner.environment == 'self-hosted' }}
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
