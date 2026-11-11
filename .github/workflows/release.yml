@@ -19,7 +19,7 @@ env:
 jobs:
   determine-version:
     name: Determine Version
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     permissions:
       contents: write
       issues: write
@@ -113,16 +113,16 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
             cross: false
           - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
             cross: true
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
             cross: true
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
             cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
@@ -183,7 +183,7 @@ jobs:
     name: Create Release
     needs: [determine-version, build]
     if: needs.determine-version.outputs.released == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     permissions:
       contents: write
 
