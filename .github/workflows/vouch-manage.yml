@@ -11,7 +11,7 @@ permissions:
   id-token: write
 jobs:
   manage:
-    runs-on: ubuntu-latest
+    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     steps:
       - name: Generate app token
         id: app-token

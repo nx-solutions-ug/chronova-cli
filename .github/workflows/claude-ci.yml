@@ -28,7 +28,7 @@ jobs:
     concurrency:
       group: claude-triage-${{ github.event.issue.number || github.event.inputs.issue_number }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ (!github.event.repository.private || github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     permissions:
       contents: read
       issues: write
@@ -156,7 +156,7 @@ jobs:
       # cancels an in-flight labelling run for the same PR.
       group: claude-label-${{ github.event.pull_request.number || github.event.inputs.pr_number }}
       cancel-in-progress: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ (!github.event.repository.private || github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     permissions:
       contents: read
       issues: write
@@ -248,7 +248,7 @@ jobs:
   cancel-label-on-close:
     name: Cancel Label On Close
     if: github.event_name == 'pull_request' && github.event.action == 'closed'
-    runs-on: ubuntu-latest
+    runs-on: ${{ (!github.event.repository.private || github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
     timeout-minutes: 1
     concurrency:
       group: claude-label-${{ github.event.pull_request.number }}
