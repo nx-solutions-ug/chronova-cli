@@ -3,8 +3,9 @@ name: Runner fallback
 # Linux jobs run on GitHub's hosted runners first. When billing stops those (failed payment, spending
 # limit reached), this re-runs the failed jobs, and a re-run (run_attempt > 1) goes to Coolify's
 # self-hosted runners. The organization variable SELF_HOSTED=true skips the hosted attempt.
-# Fork pull requests and issues or comments from outside the organization always stay on hosted
-# runners, so strangers cannot run code on our server.
+# Fork pull requests, comments on pull requests in public repositories, and issues or comments
+# from outside the organization always stay on hosted runners, so strangers cannot run code on
+# our server.
 on:
   workflow_run:
     workflows:

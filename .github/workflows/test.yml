@@ -18,7 +18,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            runner: ${{ (github.event.pull_request.head.repo.fork || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+            runner: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
           - os: macos-latest
             runner: macos-latest
           - os: windows-latest
