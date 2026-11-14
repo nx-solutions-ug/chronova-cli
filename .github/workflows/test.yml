@@ -10,15 +10,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Chooses GitHub's runners or Coolify's for the jobs below; pick-runner.yml has the rules.
+  pick-runner:
+    permissions: {}
+    uses: ./.github/workflows/pick-runner.yml
+    with:
+      untrusted: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '')) && true || false }}
+    secrets:
+      billing-token: ${{ secrets.ACTIONS_BILLING_TOKEN }}
+
   test:
     name: Test (${{ matrix.os }})
+    needs: pick-runner
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
-            runner: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+            runner: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
           - os: macos-latest
             runner: macos-latest
           - os: windows-latest

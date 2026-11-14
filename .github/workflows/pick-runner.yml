@@ -1,0 +1,111 @@
+name: Pick runner
+
+# Called as the first job of the other workflows. It decides whether their jobs run on
+# GitHub's hosted runners or on Coolify's self-hosted ones, so a run no longer has to fail
+# on a hosted runner before it is re-run on Coolify.
+#
+# The decision, in this order:
+#   1. Untrusted trigger (fork, outside author; see the caller's `untrusted`): hosted.
+#      Strangers never run code on our server.
+#   2. Organization variable SELF_HOSTED=true: Coolify.
+#   3. A re-run (run_attempt > 1): Coolify. This keeps runner-fallback.yml working.
+#      "Re-run failed jobs" does not run this job again and reuses its first answer, so the
+#      callers read `runs-on` on the first attempt and `rerun-on` on every later one.
+#   4. Public repository: hosted, its minutes are free.
+#   5. Included Actions minutes left this month, minus a reserve: hosted if any, else Coolify.
+#      GitHub has no "minutes left" value, so it is the plan's included minutes
+#      (ACTIONS_INCLUDED_MINUTES, default 2000) minus this calendar month's usage from the
+#      billing usage report, with Windows minutes counted twice and macOS minutes ten times.
+#   6. No token or no answer from the billing API: hosted, as before this workflow existed;
+#      runner-fallback.yml re-runs on Coolify if billing stops the hosted jobs.
+#
+# The usage report is only readable by an organization administrator, so step 5 needs the
+# organization secret ACTIONS_BILLING_TOKEN holding such a token.
+on:
+  workflow_call:
+    inputs:
+      untrusted:
+        description: True when the trigger must stay on GitHub's hosted runners
+        type: boolean
+        required: true
+    secrets:
+      billing-token:
+        description: Organization administrator token that can read the billing usage report
+        required: false
+    outputs:
+      runs-on:
+        description: JSON for the caller's runs-on, to be read with fromJSON
+        value: ${{ jobs.pick.outputs.runs-on }}
+      rerun-on:
+        description: The same for a re-run - hosted for untrusted triggers, Coolify otherwise
+        value: ${{ jobs.pick.outputs.rerun-on }}
+
+permissions: {}
+
+jobs:
+  pick:
+    # Trusted runs in private repositories ask from Coolify: when the minutes are used up,
+    # a hosted job could not even start to find that out.
+    runs-on: ${{ (inputs.untrusted || github.event.repository.private == false) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    timeout-minutes: 5
+    outputs:
+      runs-on: ${{ steps.pick.outputs.runs-on }}
+      rerun-on: ${{ steps.pick.outputs.rerun-on }}
+    steps:
+      - name: Pick the runner
+        id: pick
+        env:
+          UNTRUSTED: ${{ inputs.untrusted }}
+          SELF_HOSTED: ${{ vars.SELF_HOSTED }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          PRIVATE: ${{ github.event.repository.private }}
+          ORG: ${{ github.repository_owner }}
+          BILLING_TOKEN: ${{ secrets.billing-token }}
+          INCLUDED: ${{ vars.ACTIONS_INCLUDED_MINUTES }}
+          RESERVE: ${{ vars.ACTIONS_MINUTES_RESERVE }}
+        run: |
+          set -euo pipefail
+          hosted='"ubuntu-latest"'
+          coolify='["self-hosted","linux","coolify"]'
+          rerun="$coolify"
+          if [ "$UNTRUSTED" = "true" ]; then rerun="$hosted"; fi
+          echo "rerun-on=$rerun" >> "$GITHUB_OUTPUT"
+          pick() {
+            echo "runs-on=$1" >> "$GITHUB_OUTPUT"
+            echo "Runner: $1 ($2)"
+            exit 0
+          }
+
+          if [ "$UNTRUSTED" = "true" ]; then pick "$hosted" "untrusted trigger"; fi
+          if [ "$SELF_HOSTED" = "true" ]; then pick "$coolify" "SELF_HOSTED=true"; fi
+          if [ "$RUN_ATTEMPT" -gt 1 ]; then pick "$coolify" "re-run"; fi
+          if [ "$PRIVATE" = "false" ]; then pick "$hosted" "public repository"; fi
+          if [ -z "$BILLING_TOKEN" ]; then pick "$hosted" "no ACTIONS_BILLING_TOKEN, usage not checked"; fi
+
+          included="${INCLUDED:-2000}"
+          reserve="${RESERVE:-100}"
+          url="https://api.github.com/organizations/${ORG}/settings/billing/usage?year=$(date -u +%Y)&month=$(date -u +%-m)"
+          if ! report=$(curl -fsS --max-time 30 \
+            -H "Authorization: Bearer ${BILLING_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" "$url"); then
+            echo "::warning::The billing usage report could not be read; staying on GitHub's runners."
+            pick "$hosted" "billing API failed"
+          fi
+          if ! used=$(jq -er '
+            if (.usageItems | type) != "array" then error("no usageItems") else . end
+            | [ .usageItems[]
+              | select((.product | ascii_downcase) == "actions" and (.unitType | ascii_downcase) == "minutes")
+              | .quantity * (if (.sku | ascii_downcase | test("macos")) then 10
+                             elif (.sku | ascii_downcase | test("windows")) then 2
+                             else 1 end)
+            ] | add // 0 | floor' <<<"$report"); then
+            echo "::warning::The billing usage report was not in the expected form; staying on GitHub's runners."
+            pick "$hosted" "billing report not understood"
+          fi
+          left=$((included - used))
+          echo "Actions minutes this month: ${used} used of ${included} included, ${left} left (reserve ${reserve})."
+          if [ "$left" -gt "$reserve" ]; then
+            pick "$hosted" "${left} included minutes left"
+          fi
+          pick "$coolify" "included minutes used up"

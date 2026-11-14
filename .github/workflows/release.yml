@@ -17,9 +17,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Chooses GitHub's runners or Coolify's for the jobs below; pick-runner.yml has the rules.
+  pick-runner:
+    permissions: {}
+    uses: ./.github/workflows/pick-runner.yml
+    with:
+      untrusted: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '')) && true || false }}
+    secrets:
+      billing-token: ${{ secrets.ACTIONS_BILLING_TOKEN }}
+
   determine-version:
     name: Determine Version
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    needs: pick-runner
+    runs-on: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
     permissions:
       contents: write
       issues: write
@@ -105,7 +115,7 @@ jobs:
 
   build:
     name: Build ${{ matrix.target }}
-    needs: determine-version
+    needs: [pick-runner, determine-version]
     if: needs.determine-version.outputs.released == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
@@ -113,16 +123,16 @@ jobs:
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            os: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+            os: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
             cross: false
           - target: x86_64-unknown-linux-musl
-            os: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+            os: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
             cross: true
           - target: aarch64-unknown-linux-gnu
-            os: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+            os: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
             cross: true
           - target: aarch64-unknown-linux-musl
-            os: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+            os: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
             cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
@@ -183,9 +193,9 @@ jobs:
 
   release:
     name: Create Release
-    needs: [determine-version, build]
+    needs: [pick-runner, determine-version, build]
     if: needs.determine-version.outputs.released == 'true'
-    runs-on: ${{ (github.event.pull_request.head.repo.fork || (github.event.issue.pull_request && !github.event.repository.private) || !contains(fromJSON('["","OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association || github.event.review.author_association || github.event.issue.author_association || '') || (github.run_attempt == 1 && vars.SELF_HOSTED != 'true')) && 'ubuntu-latest' || fromJSON('["self-hosted","linux","coolify"]') }}
+    runs-on: ${{ fromJSON(github.run_attempt == 1 && needs.pick-runner.outputs.runs-on || needs.pick-runner.outputs.rerun-on) }}
     permissions:
       contents: write
 
