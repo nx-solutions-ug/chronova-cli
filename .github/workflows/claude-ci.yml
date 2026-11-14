@@ -65,6 +65,14 @@ jobs:
       - name: Triage issue
         id: claude
         uses: anthropics/claude-code-action@v1
+        env:
+          # `allowed_non_write_users` makes the action wrap Claude's shell commands in
+          # bubblewrap. Coolify's runners are Sysbox containers on a host that restricts
+          # unprivileged user namespaces, so bubblewrap cannot start there, no command
+          # runs, and Claude ends after a few turns without doing its work. Only trusted
+          # triggers reach those runners (see runs-on), so the sandbox is switched off
+          # there; on GitHub's runners the empty value keeps the action's default (on).
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ runner.environment == 'self-hosted' && '0' || '' }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}

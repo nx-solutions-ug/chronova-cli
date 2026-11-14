@@ -370,6 +370,13 @@ jobs:
         # `env` cannot read `steps.*`.
         env:
           TOOLCHAIN_READY: ${{ steps.install.outcome == 'success' }}
+          # `allowed_non_write_users` makes the action wrap Claude's shell commands in
+          # bubblewrap. Coolify's runners are Sysbox containers on a host that restricts
+          # unprivileged user namespaces, so bubblewrap cannot start there, no command
+          # runs, and Claude ends after a few turns without doing its work. Only trusted
+          # triggers reach those runners (see runs-on), so the sandbox is switched off
+          # there; on GitHub's runners the empty value keeps the action's default (on).
+          CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: ${{ runner.environment == 'self-hosted' && '0' || '' }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
@@ -416,8 +423,20 @@ jobs:
 
       - name: Verify a review was actually posted
         if: ${{ !cancelled() }}
+        env:
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         run: |
           set -euo pipefail
+          # A run that ends cleanly without a review hides its reason: the step above
+          # only prints Claude's last message when the action itself failed.
+          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+            msg=$(jq -r '[.. | objects | select(.type? == "result") | .result // empty] | last // ""' "$EXECUTION_FILE")
+            if [ -n "$msg" ]; then
+              echo "::group::Claude's final message"
+              echo "$msg"
+              echo "::endgroup::"
+            fi
+          fi
           if ! git diff --quiet "origin/${BASE_REF}"...HEAD -- .github/workflows/claude-code-review.yml; then
             echo "::notice::This PR modifies the review workflow itself, so review verification is skipped by design."
             exit 0
