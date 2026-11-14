@@ -5,8 +5,8 @@ name: Runner fallback
 # self-hosted runners. The organization variable SELF_HOSTED=true skips the hosted attempt.
 # Fork pull requests, comments on pull requests in public repositories, and issues or comments
 # from outside the organization always stay on hosted runners, so strangers cannot run code on
-# our server. In public repositories the Claude workflows always stay hosted: they act on
-# outside content, and public repositories get hosted minutes for free.
+# our server. In public repositories every job always stays hosted: public repositories get
+# hosted minutes for free, and the Claude workflows there act on outside content.
 on:
   workflow_run:
     workflows:
